@@ -1,0 +1,98 @@
+{
+ "id": "markham",
+ "lang": "en",
+ "country": "CA",
+ "area": "Markham",
+ "label": "Unionville, Markham, Ontario",
+ "map": "global/markham_map.json",
+ "cctv": null,
+ "rules": [
+  {
+   "layer": "crossings",
+   "radius": 3,
+   "ban": "stop",
+   "reason": "On a crosswalk — no stopping"
+  },
+  {
+   "layer": "busStops",
+   "radius": 12,
+   "ban": "stop",
+   "reason": "Within 12 m of a bus stop — no stopping (York Region By-law 2023-34 s.3.2)"
+  },
+  {
+   "layer": "schools",
+   "radius": 30,
+   "ban": "stop",
+   "reason": "School zone — signed no stopping in school hours"
+  },
+  {
+   "layer": "hydrants",
+   "radius": 3,
+   "ban": "pickup",
+   "reason": "Within 3 m of a fire hydrant — pickup only (York By-law s.3.1(b))"
+  },
+  {
+   "layer": "stops",
+   "radius": 9,
+   "ban": "pickup",
+   "reason": "Within 9 m of an intersection — pickup only (York By-law s.3.1(d))"
+  },
+  {
+   "layer": "signals",
+   "radius": 15,
+   "ban": "pickup",
+   "reason": "Within 15 m of a signalized intersection — pickup only (York By-law s.3.1(e))"
+  }
+ ],
+ "busLanes": {},
+ "stopLimit": 180,
+ "peak": null,
+ "peakStop": 120,
+ "pickupOnly": 60,
+ "stopWhyDefault": "Passenger loading is not parking in Markham — keep the wait under 3 min",
+ "routeCurbBan": null,
+ "academyRule": false,
+ "avoid": {
+  "child": {
+   "parking": "Parking lot entrance — cars pulling in and out"
+  }
+ },
+ "prefer": {
+  "child": {
+   "convenience": [
+    25,
+    "busy and well-lit"
+   ],
+   "supermarket": [
+    25,
+    "busy and well-lit"
+   ]
+  },
+  "senior": {
+   "cafe": [
+    20,
+    "with a seat to wait"
+   ],
+   "pharmacy": [
+    20,
+    "with a seat to wait"
+   ]
+  }
+ },
+ "scenario": {
+  "riderS": 900,
+  "riderOff": 40,
+  "carBack": 500,
+  "riderName": "Unionville Public School"
+ },
+ "presets": [],
+ "member": {
+  "name": "Emma",
+  "type": "child"
+ },
+ "carDesc": "White Tucson · CBXN 123",
+ "sources": [
+  "York Region By-law 2023-34",
+  "City of Markham parking by-law 2005-188"
+ ]
+}

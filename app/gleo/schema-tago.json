@@ -1,0 +1,54 @@
+{
+  "packageName": "ai.meeos.tago",
+  "appDescription": "A pickup companion that agrees on the best meeting point with a waiting family member and confirms when they board the car.",
+  "invokeWord": "타고",
+  "version": "0.1.0",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "START_PICKUP",
+        "description": "Start picking up a registered family member and share a meeting point link with them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "memberName": {
+              "type": "string",
+              "description": "Name of the family member to pick up."
+            }
+          },
+          "required": [
+            "memberName"
+          ]
+        },
+        "component": "activity"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "FIND_NEARBY",
+        "description": "Find a nearby place during a pickup: a parking lot near the meeting point, the nearest public restroom, a drive-thru, or a takeout spot on the way that fits the time before the family member comes out; offer navigation and a voice order.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "parking",
+                "toilet",
+                "drivethru",
+                "takeout"
+              ],
+              "description": "Kind of place to find."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        "component": "activity"
+      }
+    }
+  ]
+}

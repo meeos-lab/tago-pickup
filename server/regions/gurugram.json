@@ -1,0 +1,91 @@
+{
+ "id": "gurugram",
+ "lang": "en",
+ "country": "IN",
+ "area": "Gurugram",
+ "label": "Sector 43, Gurugram, Haryana",
+ "map": "global/gurugram_map.json",
+ "cctv": null,
+ "rules": [
+  {
+   "layer": "crossings",
+   "radius": 10,
+   "ban": "pickup",
+   "reason": "Near a pedestrian crossing — no parking (Rules of the Road Reg. 15(2)(iii))"
+  },
+  {
+   "layer": "signals",
+   "radius": 15,
+   "ban": "pickup",
+   "reason": "Near a traffic signal — no parking (Reg. 15(2)(iii))"
+  },
+  {
+   "layer": "busStops",
+   "radius": 15,
+   "ban": "pickup",
+   "reason": "Near a bus stop — no parking (Reg. 15(2)(viii))"
+  },
+  {
+   "layer": "schools",
+   "radius": 15,
+   "ban": "pickup",
+   "reason": "Near a school entrance — no parking (Reg. 15(2)(viii))"
+  },
+  {
+   "layer": "hydrants",
+   "radius": 5,
+   "ban": "pickup",
+   "reason": "Near a fire hydrant — no parking (Reg. 15(2)(viii))"
+  }
+ ],
+ "busLanes": {},
+ "stopLimit": 180,
+ "peak": null,
+ "peakStop": 120,
+ "pickupOnly": 60,
+ "stopWhyDefault": "Stopping over 3 min counts as parking — keep the wait under 3 min",
+ "routeCurbBan": "Main road curb — no parking on a main road (Reg. 15(2)(iv))",
+ "academyRule": false,
+ "avoid": {
+  "child": {
+   "parking": "Parking lot entrance — cars pulling in and out"
+  }
+ },
+ "prefer": {
+  "child": {
+   "convenience": [
+    25,
+    "busy and well-lit"
+   ],
+   "supermarket": [
+    25,
+    "busy and well-lit"
+   ]
+  },
+  "senior": {
+   "cafe": [
+    20,
+    "with a seat to wait"
+   ],
+   "pharmacy": [
+    20,
+    "with a seat to wait"
+   ]
+  }
+ },
+ "scenario": {
+  "riderS": 560,
+  "riderOff": 80,
+  "carBack": 500,
+  "riderName": "Ashoka Marg tuition centre"
+ },
+ "presets": [],
+ "member": {
+  "name": "Aarav",
+  "type": "child"
+ },
+ "carDesc": "White Creta · HR 26 AB 1234",
+ "sources": [
+  "Rules of the Road Regulations 1989, Reg. 15"
+ ]
+}

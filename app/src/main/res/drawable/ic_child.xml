@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- server/icons.py가 ORBIT 심볼(server/icons/orbit)에서 만든 파일. 직접 고치지 말 것 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="26" android:viewportHeight="26">
+    <group android:translateX="1" android:translateY="1">
+        <path android:pathData="M9.0 6.0a3.0 3.0 0 1 0 6.0 0a3.0 3.0 0 1 0 -6.0 0Z" android:fillColor="#FFFFFFFF" />
+        <path android:pathData="M7 22v-5H4l5-7h6l5 7h-3v5h-4v-5h-2v5Z" android:fillColor="#FFFFFFFF" />
+    </group>
+</vector>

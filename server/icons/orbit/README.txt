@@ -1,0 +1,1 @@
+ORBIT: 24 original solid symbols. markers/: default; selected/: outline; icons/: transparent symbols. Leaflet iconSize [48,48], iconAnchor [24,42], popupAnchor [0,-42]. Tip is the geographic anchor. Color categories are illustrative and can be changed. All SVGs are self contained.

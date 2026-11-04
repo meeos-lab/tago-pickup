@@ -1,0 +1,21 @@
+{
+  "packageName": "ai.meeos.gilbeot",
+  "appDescription": "A road companion that links cars on the same road and warns the cars behind about what the cars ahead just met: a jam tail, a suspected crash, rain, debris, or an approaching emergency vehicle.",
+  "invokeWord": "길벗",
+  "version": "0.1.0",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "START_ROAD_LINK",
+        "description": "Start linking with cars on the same road so that hazards met by the cars ahead are announced to this car.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "activity"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# 줄바꿈: 소스는 LF로 저장소에 넣고, Windows 스크립트만 CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
+gradlew text eol=lf
+
+# 바이너리
+*.apk binary
+*.jks binary
+*.jar binary
+*.png binary
+*.jpg binary
+*.mp4 binary

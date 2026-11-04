@@ -1,0 +1,130 @@
+{
+ "id": "daechi",
+ "lang": "ko",
+ "country": "KR",
+ "area": "대치동",
+ "label": "대치동 학원가 (서울 강남구)",
+ "map": "daechi_map.json",
+ "cctv": "daechi_cctv.json",
+ "rules": [
+  {
+   "layer": "crossings",
+   "radius": 10,
+   "ban": "stop",
+   "reason": "횡단보도 10m 이내 정차 금지",
+   "fine": 4
+  },
+  {
+   "layer": "busStops",
+   "radius": 10,
+   "ban": "stop",
+   "reason": "버스정류장 10m 이내 정차 금지",
+   "fine": 4
+  },
+  {
+   "layer": "signals",
+   "radius": 15,
+   "ban": "stop",
+   "reason": "교차로 가장자리 정차 금지",
+   "fine": 4
+  },
+  {
+   "layer": "hydrants",
+   "radius": 5,
+   "ban": "stop",
+   "reason": "소화전 5m 이내 정차 금지",
+   "fine": 8
+  },
+  {
+   "layer": "schools",
+   "radius": 300,
+   "ban": "stop",
+   "reason": "어린이보호구역(추정) 정차 금지",
+   "fine": 12
+  }
+ ],
+ "busLanes": {
+  "남부순환로": [
+   "가로변 버스전용차로 운영 중(평일 07–10·17–21시)",
+   [
+    [
+     7,
+     10
+    ],
+    [
+     17,
+     21
+    ]
+   ]
+  ],
+  "영동대로": [
+   "가로변 버스전용차로 운영 중(평일 07–21시)",
+   [
+    [
+     7,
+     21
+    ]
+   ]
+  ]
+ },
+ "stopLimit": 300,
+ "peak": [
+  21,
+  23
+ ],
+ "peakStop": 120,
+ "pickupOnly": 60,
+ "routeCurbBan": null,
+ "academyRule": true,
+ "avoid": {
+  "child": {
+   "parking": "주차장 출입구 — 차가 드나들어 아이가 기다리기 위험"
+  }
+ },
+ "prefer": {
+  "child": {
+   "convenience": [
+    25,
+    "사람 많고 밝은"
+   ],
+   "subway": [
+    15,
+    "사람 많고 밝은"
+   ]
+  },
+  "senior": {
+   "cafe": [
+    20,
+    "앉아서 기다릴 수 있는"
+   ],
+   "pharmacy": [
+    20,
+    "앉아서 기다릴 수 있는"
+   ]
+  }
+ },
+ "scenario": {
+  "riderS": 680,
+  "riderOff": 35,
+  "carBack": 500,
+  "riderName": "은마아파트입구사거리 학원가"
+ },
+ "presets": [
+  {
+   "key": "station",
+   "cand": "대치역 1번 출구",
+   "dlat": 0.0003,
+   "dlon": 0,
+   "name": "대치역 1번 출구 뒤편"
+  }
+ ],
+ "member": {
+  "name": "지수",
+  "type": "child"
+ },
+ "carDesc": "흰색 그랜저 · 12가 3456",
+ "sources": [
+  "도로교통법 제32조",
+  "강남구 고정형 CCTV 운영 기준"
+ ]
+}

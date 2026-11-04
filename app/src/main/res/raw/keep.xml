@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 리소스 축소에서 지킬 그림: 이름으로 찾는다(getIdentifier) — 지도 마커(tago_*), 퍽 글리프(ic_*), SDK 커서·핀 -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/tago_*,@drawable/ic_*,@drawable/location_marker,@drawable/end,@drawable/pass,@drawable/start" />
