@@ -23,7 +23,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
         private set
     var sessionId: String? = null
         private set
-    var status = "idle"
+    var status = PickupStatus.IDLE
         private set
     var lastState: JSONObject? = null
         private set
@@ -69,16 +69,20 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
 
     // ------------------------------------------------------------ 시작·끝
 
+    private var startGen = 0   // 시작 세대: reset 마다 올린다 — 늦게 온 앞 시작 요청의 응답이 뒤 시작(또는 종료)을 덮지 않게
+
     fun start(m: Member) {
         member = m
         reset()
+        val gen = startGen
         val body = JSONObject()
             .put("member", JSONObject().put("name", m.name).put("type", m.type))
             .put("region", region.id)
             .apply { if (region == Region.DAECHI) put("carDesc", "흰색 그랜저 · 12가 3456") }
-        s.api.post("/api/session", body, onError = { e -> s.log.d("세션 생성 실패: ${e.message}") }) { res ->
+        s.api.post("/api/session", body, onError = { e -> if (gen == startGen) s.log.d("세션 생성 실패: ${e.message}") }) { res ->
+            if (gen != startGen) return@post   // 그사이 다시 시작했거나 끝냈다
             sessionId = res.getString("id")
-            status = "waiting_rider"
+            status = PickupStatus.WAITING_RIDER
             onMapUrl("${BuildConfig.SERVER_URL}/car/$sessionId")
             s.log.demo("가족(보호자) 보기: ${BuildConfig.PUBLIC_URL}/f/$sessionId")
             s.log.demo("링크: ${BuildConfig.PUBLIC_URL}${res.getString("link")}")
@@ -88,11 +92,12 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
     }
 
     private fun reset() {
+        startGen++
         sessionId = null; lastProposalVersion = 0; askedPointId = null; askedAltId = null
         announcedConfirm = false; announcedLeave = false; announcedArrive = false; spokenUntil = 0.0
         arrivedAt = 0L; parkingAsked = false; parkedWaiting = false
         nearby.reset()
-        status = "idle"; car.rearDoorOpened = false; progress = 0.0; lastState = null; lastMessage = null
+        status = PickupStatus.IDLE; car.rearDoorOpened = false; progress = 0.0; lastState = null; lastMessage = null
         naviRouted = false; replanAt = 0L; replanAckSaid = false; replanNagSaid = false; aboardSaid = false; boardedSeat = null
         roadDoorWarnedAt = 0L; roadDoorWasOpen = false; passSent = false; confirmedSeen = null; beltAtConfirm = emptyMap()
         s.dialog.cancel()
@@ -104,11 +109,11 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
         if (car.driving) progress = (progress + car.speedMs * dt).coerceIn(0.0, maxProgress())
         // 시연 보정: 확정 지점 80m 안에서 멈추면 그 지점 길가에 정차한 것으로 본다.
         // 매장을 들르는 중에는 만날 곳으로 보정하지 않는다(매장과 만날 곳이 가까우면 도착이 겹친다)
-        if (nearby.orderStage != "placed") targetX()?.let { tx -> if (car.speedMs < 1f && abs(progress - tx) < 80) progress = tx }
+        if (nearby.orderStage != OrderStage.PLACED) targetX()?.let { tx -> if (car.speedMs < 1f && abs(progress - tx) < CURB_SNAP_M) progress = tx }
         val id = sessionId
         // 탑승·하차는 정차 중에만 판단한다 — 그 구간(확정~하차, 정차 중)에서만 좌석·벨트·문을 매초, 달리는 동안은 5초마다
-        car.readCabin = id != null && status in setOf("confirmed", "arrived", "boarded") && car.stopped
-        if (id != null && status != "dropped") {   // 내린 뒤에는 차 위치·속도를 더 보내지 않는다
+        car.readCabin = id != null && status in CABIN_WATCH && car.stopped
+        if (id != null && status != PickupStatus.DROPPED) {   // 내린 뒤에는 차 위치·속도를 더 보내지 않는다
             // 바뀐 게 있을 때만 보낸다(주행 중이면 매초, 정차 중이면 2초마다 — 응답으로 아이 쪽 변화를 받아 화면·음성을 갱신)
             val g = if (car.driving) "D" else "P"
             val sig = "$g|${car.wiper}|${"%.0f".format(progress)}|${"%.1f".format(car.speedMs)}"
@@ -142,7 +147,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
         lastState = st
         val m = member ?: return
         val serverStatus = st.optString("status")
-        if (status !in setOf("boarded", "dropped")) status = serverStatus
+        if (status !in RIDER_ON_BOARD) status = serverStatus
         val confirmed = st.optString("confirmed").takeIf { it.isNotEmpty() && it != "null" }
         if (confirmed == null && announcedConfirm) {
             // 아이가 '화장실 급해요'를 눌러 만남 지점을 다시 정하는 중: 확정·도착 안내를 처음부터
@@ -165,7 +170,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
                 s.say(t[R.string.say_message, m.name, text])
                 // "2분만 기다려 주세요"처럼 늦게 나오면, 그 시간 안에 들를 수 있는 가는 길 포장 주문을 제안
                 val late = Regex("""(\d+)\s*분만|give me (\d+) min""", RegexOption.IGNORE_CASE).find(text)
-                if (late != null && confirmed != null && nearby.canSuggest() && status == "confirmed") {
+                if (late != null && confirmed != null && nearby.canSuggest() && status == PickupStatus.CONFIRMED) {
                     val n = late.groupValues[1].ifEmpty { late.groupValues[2] }
                     nearby.suggestTakeout(t[R.string.lead_late_minutes, m.name, n])
                 }
@@ -194,7 +199,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
             replanAckSaid = true
             s.say(t[R.string.say_replan_ack, t.subj(m.name)])
         }
-        if (status == "boarded" && st.optJSONObject("boarding")?.optBoolean("riderConfirmed") == true && !aboardSaid) {
+        if (status == PickupStatus.BOARDED && st.optJSONObject("boarding")?.optBoolean("riderConfirmed") == true && !aboardSaid) {
             aboardSaid = true
             s.say(t[R.string.say_rider_confirmed, t.subj(m.name)])
         }
@@ -209,7 +214,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
                 else t[R.string.say_confirmed_rider, t.subj(m.name), dest])
         }
         val eta = st.optJSONObject("eta")
-        if (confirmed != null && status == "confirmed" && nearby.canSuggest() && eta != null && eta.optInt("walkSec") - eta.optInt("carSec") > 240) {
+        if (confirmed != null && status == PickupStatus.CONFIRMED && nearby.canSuggest() && eta != null && eta.optInt("walkSec") - eta.optInt("carSec") > TAKEOUT_SLACK_S) {
             // 대치동은 가는 길 포장, 해외는 드라이브스루(지역 데이터에 포장 매장이 없다)
             nearby.suggestTakeout(t[R.string.lead_walk_slower, m.name, t.mins(eta.optInt("walkSec") - eta.optInt("carSec"))], if (region == Region.DAECHI) "takeout" else "drivethru")
         }
@@ -217,7 +222,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
             announcedLeave = true
             s.say(t[R.string.say_leave_now, m.name])
         }
-        if (serverStatus == "arrived" && !announcedArrive) {
+        if (serverStatus == PickupStatus.ARRIVED && !announcedArrive) {
             announcedArrive = true
             arrivedAt = System.currentTimeMillis()
             s.say(t[R.string.say_arrived, pointName(st, confirmed ?: ""), m.name, curbDoorLabel()])
@@ -274,20 +279,20 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
         val stopped = car.stopped
         val newlyBelted = Region.REAR_SEATS.filter { beltOf(it) == true && beltAtConfirm[it] == false && car.seatOcc[it] != false }
         val doorCycle = car.rearDoorOpened && !car.rearDoorOpen()
-        if ((status == "arrived" || (status == "confirmed" && stopped)) && stopped && (newlyBelted.isNotEmpty() || (doorCycle && Region.REAR_SEATS.any { car.seatOcc[it] == true }))) {
+        if ((status == PickupStatus.ARRIVED || (status == PickupStatus.CONFIRMED && stopped)) && stopped && (newlyBelted.isNotEmpty() || (doorCycle && Region.REAR_SEATS.any { car.seatOcc[it] == true }))) {
             val seat = newlyBelted.firstOrNull { it == region.riderSeat } ?: newlyBelted.firstOrNull()
                 ?: region.riderSeat.takeIf { car.seatOcc[it] == true } ?: Region.REAR_SEATS.first { car.seatOcc[it] == true }
-            status = "boarded"
+            status = PickupStatus.BOARDED
             boardedSeat = seat
             car.rearDoorOpened = false
-            post("/api/session/$id/boarding", JSONObject().put("state", "boarded").put("seat", seat.name).put("seatLabel", t.seatLabel(seat)).put("belt", beltOf(seat) == true))
+            post("/api/session/$id/boarding", JSONObject().put("state", PickupStatus.BOARDED).put("seat", seat.name).put("seatLabel", t.seatLabel(seat)).put("belt", beltOf(seat) == true))
             s.say(t[R.string.say_boarded, t.seatLabel(seat), m.name])
             s.render()
-        } else if (status == "boarded" && !car.driving && car.rearDoorOpen() && (boardedSeat?.let { car.seatOcc[it] } == false || progress > maxProgress() - 50)) {
+        } else if (status == PickupStatus.BOARDED && !car.driving && car.rearDoorOpen() && (boardedSeat?.let { car.seatOcc[it] } == false || progress > maxProgress() - DROP_END_MARGIN_M)) {
             // 하차: 정차 후 2열 문 열림 + 탄 좌석이 빔(실차) / 에뮬레이터는 착석 값이 고정이라 경로 끝(도곡로 동쪽) 도착으로 대신
-            status = "dropped"
+            status = PickupStatus.DROPPED
             val seat = boardedSeat ?: region.riderSeat
-            post("/api/session/$id/boarding", JSONObject().put("state", "dropped").put("seat", seat.name).put("seatLabel", t.seatLabel(seat)))
+            post("/api/session/$id/boarding", JSONObject().put("state", PickupStatus.DROPPED).put("seat", seat.name).put("seatLabel", t.seatLabel(seat)))
             s.say(t[R.string.say_dropped, m.name])
             s.render()
         }
@@ -301,20 +306,20 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
         val wasOpen = roadDoorWasOpen
         roadDoorWasOpen = open
         if (!open || wasOpen || sessionId == null || parkedWaiting) return
-        if (status !in setOf("confirmed", "arrived", "boarded") || car.speedMs >= 1f) return
-        if (System.currentTimeMillis() - roadDoorWarnedAt < 8000) return
+        if (status !in CABIN_WATCH || car.speedMs >= 1f) return
+        if (System.currentTimeMillis() - roadDoorWarnedAt < ROAD_DOOR_REPEAT_MS) return
         roadDoorWarnedAt = System.currentTimeMillis()
         val roadSide = if (region.leftHandTraffic) t[R.string.side_right] else t[R.string.side_left]
-        s.say(if (status == "boarded") t[R.string.say_exit_curb_door, curbSideLabel()] else t[R.string.say_board_curb_door, m.name, curbSideLabel(), roadSide])
+        s.say(if (status == PickupStatus.BOARDED) t[R.string.say_exit_curb_door, curbSideLabel()] else t[R.string.say_board_curb_door, m.name, curbSideLabel(), roadSide])
         s.log.d("차도 쪽 문 경고")
     }
 
     /** 자동 재약속 뒤 30초 안에 아이가 [확인했어요]를 누르지 않으면 운전자에게 한 번 알린다(아이가 옛 지점에서 기다릴 수 있다) */
     private fun checkReplanAck() {
         val m = member ?: return
-        if (replanAt == 0L || replanAckSaid || replanNagSaid || status !in setOf("confirmed", "arrived")) return
+        if (replanAt == 0L || replanAckSaid || replanNagSaid || status !in EN_ROUTE) return
         if (lastState?.optJSONObject("replan")?.optBoolean("ack") == true) return
-        if (System.currentTimeMillis() - replanAt < 30_000) return
+        if (System.currentTimeMillis() - replanAt < REPLAN_NAG_MS) return
         replanNagSaid = true
         s.say(t[R.string.say_replan_nag, t.subj(m.name)])
     }
@@ -323,9 +328,9 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
      *  80m는 '그 안에서 멈추면 그 지점에 정차한 것으로 보는' 시연 보정 범위 */
     private fun checkPassed() {
         val id = sessionId ?: return
-        if (passSent || status != "confirmed" || nearby.orderStage == "placed") return
+        if (passSent || status != PickupStatus.CONFIRMED || nearby.orderStage == OrderStage.PLACED) return
         val tx = targetX() ?: return
-        if (car.driving && car.speedMs > 2f && progress > tx + 80) {
+        if (car.driving && car.speedMs > 2f && progress > tx + CURB_SNAP_M) {
             passSent = true
             s.log.d("만남 지점을 지나침 — 다시 정함")
             post("/api/session/$id/passed", JSONObject())
@@ -334,10 +339,10 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
 
     /** 근처 주차장: 도착 후 정차 한도가 30초 남으면 한 번 묻는다 */
     private fun checkParkingTime() {
-        if (arrivedAt == 0L || parkingAsked || s.dialog.awaiting || status != "arrived") return
+        if (arrivedAt == 0L || parkingAsked || s.dialog.awaiting || status != PickupStatus.ARRIVED) return
         if (nearby.emergencyActive()) return      // 포장·드라이브스루를 이미 제안했어도 주차장 안내는 따로 한다
         val waited = (System.currentTimeMillis() - arrivedAt) / 1000
-        if (waited >= stopLimitSec() - 30) {
+        if (waited >= stopLimitSec() - PARKING_ASK_BEFORE_S) {
             parkingAsked = true
             nearby.ask("parking", auto = true)
         }
@@ -345,10 +350,10 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
 
     /** 지금 만남 지점의 정차 한도(초). 제안 1순위가 확정 지점이면 그 값, 아니면 기본 5분 */
     private fun stopLimitSec(): Int {
-        val st = lastState ?: return 300
+        val st = lastState ?: return DEFAULT_STOP_LIMIT_S
         val tid = st.optJSONObject("target")?.optString("id")
         val best = st.optJSONObject("proposal")?.optJSONObject("best")
-        return if (best != null && best.optString("id") == tid) best.optInt("stopLimit", 300) else 300
+        return if (best != null && best.optString("id") == tid) best.optInt("stopLimit", DEFAULT_STOP_LIMIT_S) else DEFAULT_STOP_LIMIT_S
     }
 
     // ------------------------------------------------------------ 도우미
@@ -357,7 +362,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
     fun targetX(): Double? = lastState?.optJSONObject("target")?.optDouble("x")?.takeIf { !it.isNaN() }
 
     /** 시연 경로(도곡로) 끝까지의 거리 */
-    private fun maxProgress(): Double = lastState?.optDouble("maxProgress")?.takeIf { !it.isNaN() } ?: 2000.0
+    private fun maxProgress(): Double = lastState?.optDouble("maxProgress")?.takeIf { !it.isNaN() } ?: DEFAULT_ROUTE_M
 
     fun pointName(st: JSONObject, id: String): String =
         st.optJSONObject("target")?.takeIf { it.optString("id") == id }?.optString("name")
@@ -379,4 +384,18 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
     }
     /** 응급 중에 묻던 질문이 있었다면 다음 상태에서 다시 묻는다 */
     fun reaskProposalIfPending() { if (lastState?.isNull("confirmed") != false) lastProposalVersion = 0 }
+
+    private companion object {
+        val CABIN_WATCH = setOf(PickupStatus.CONFIRMED, PickupStatus.ARRIVED, PickupStatus.BOARDED)   // 좌석·벨트·문을 보는 상태(탑승 판단)
+        val EN_ROUTE = setOf(PickupStatus.CONFIRMED, PickupStatus.ARRIVED)                 // 만날 곳으로 가는 중
+        val RIDER_ON_BOARD = setOf(PickupStatus.BOARDED, PickupStatus.DROPPED)             // 차가 직접 정한 상태 — 서버 상태로 되돌리지 않는다
+        const val CURB_SNAP_M = 80.0            // 이 안에서 멈추면 그 지점 정차로 보정, 이만큼 넘어 달리면 지나침
+        const val TAKEOUT_SLACK_S = 240         // 아이가 이만큼(초) 늦게 오면 가는 길 포장을 제안
+        const val DROP_END_MARGIN_M = 50        // 경로 끝 이만큼 앞이면 하차로 본다(에뮬레이터 좌석 신호 대신)
+        const val ROAD_DOOR_REPEAT_MS = 8_000L  // 도로 쪽 문 경고 반복 간격
+        const val REPLAN_NAG_MS = 30_000L       // 바뀐 만날 곳을 확인 안 하면 다시 알리기까지
+        const val PARKING_ASK_BEFORE_S = 30     // 정차 한도 이만큼 전에 주차 안내
+        const val DEFAULT_STOP_LIMIT_S = 300    // 정차 한도 기본값(5분)
+        const val DEFAULT_ROUTE_M = 2000.0      // 경로 길이를 모를 때
+    }
 }

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-error.response",
+  "title": "허브 오류 응답 — RFC 9457 Problem Details(400 schema · 403 token · 404 · 429 · 503)",
+  "description": "허브(handle)가 만든 오류. RFC 9457 의 type·title·status·detail·instance 에 확장 필드를 더한다: error(옛 키 — 그대로 남김), field·rule(error \"schema\"), retryAfter(429, Retry-After 헤더와 같은 초), api. PC 서버는 Content-Type application/problem+json 과 429 Retry-After 헤더를 보낸다(앱 내장 서버는 아직 application/json, 헤더 없음 — 51 2.5). 전송 층 오류(잘못된 JSON·본문 크기)는 이 형식이 아니다.",
+  "type": "object",
+  "required": ["api", "error", "type", "title", "status", "detail", "instance"],
+  "properties": {
+    "api": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/api"},
+    "type": {"type": "string", "pattern": "^urn:meeos:gilbeot-road:problem:[a-z-]+$", "description": "RFC 9457 type — 문제 종류 URI(urn:meeos:gilbeot-road:problem:<error, 공백은 ->)"},
+    "title": {"type": "string", "description": "RFC 9457 title — 종류마다 고정된 짧은 영어 글"},
+    "status": {"type": "integer", "minimum": 400, "maximum": 599, "description": "RFC 9457 status — HTTP 상태 코드와 같은 값"},
+    "detail": {"type": "string", "description": "RFC 9457 detail — 이번 요청에 대한 설명(예 \"events[1].lat: maximum\", \"retry after 60 s\")"},
+    "instance": {"type": "string", "pattern": "^/", "description": "RFC 9457 instance — 빈 조각을 뺀 요청 경로(예 /api/road/state)"},
+    "error": {"enum": ["schema", "token", "full", "car", "code", "locked", "not found"], "description": "확장: 옛 오류 코드(호환을 위해 그대로)"},
+    "field": {"type": "string", "description": "확장(error \"schema\"): 처음 어긋난 필드 경로(예 \"me\", \"events[0].lat\", \"samples[3][1]\"). 본문이 객체가 아니면 빈 글"},
+    "rule": {"enum": ["type", "required", "minimum", "maximum", "minLength", "maxLength", "pattern", "minItems", "maxItems"], "description": "확장(error \"schema\"): 어긋난 스키마 키워드"},
+    "retryAfter": {"type": "integer", "minimum": 1, "description": "확장(429): 코드 합류 잠금이 풀리기까지 남은 초(올림) — Retry-After 헤더와 같은 값"}
+  },
+  "allOf": [
+    {"if": {"properties": {"error": {"const": "schema"}}}, "then": {"required": ["field", "rule"]}},
+    {"if": {"properties": {"error": {"const": "locked"}}}, "then": {"required": ["retryAfter"], "properties": {"status": {"const": 429}}}}
+  ]
+}

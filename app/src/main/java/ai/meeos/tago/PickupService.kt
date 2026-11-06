@@ -1,5 +1,6 @@
 package ai.meeos.tago
 
+import ai.meeos.tago.app.Edition
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -20,8 +21,8 @@ class PickupService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val nm = getSystemService(NotificationManager::class.java)
-        val text = getString(if (BuildConfig.PICKUP) R.string.notif_pickup else R.string.notif_road)
-        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, if (BuildConfig.PICKUP) getString(R.string.notif_channel) else text, NotificationManager.IMPORTANCE_LOW))
+        val text = getString(if (Edition.pickup) R.string.notif_pickup else R.string.notif_road)
+        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, if (Edition.pickup) getString(R.string.notif_channel) else text, NotificationManager.IMPORTANCE_LOW))
         val n = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL) else @Suppress("DEPRECATION") Notification.Builder(this))
             .setSmallIcon(R.drawable.ic_car)
             .setContentTitle(BuildConfig.APP_LABEL)

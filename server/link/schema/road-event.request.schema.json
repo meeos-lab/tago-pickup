@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-event.request",
+  "title": "POST /api/road/event 요청",
+  "description": "차가 감지한 사건(급제동·충돌·사이렌·충전 등). type 은 미정의 이름도 받는다(그대로 위험 종류). 그 순간의 s·speed 를 함께 보내면 허브가 마지막 상태 보고 자리 대신 그 자리에 찍는다.",
+  "type": "object",
+  "required": ["me", "type"],
+  "properties": {
+    "me": {"type": "string", "minLength": 1, "maxLength": 64},
+    "t": {"type": "number", "minimum": 0},
+    "type": {"type": "string", "minLength": 1, "maxLength": 32, "description": "HARD_BRAKE, IMPACT, SIREN, YIELD, CHARGE_FAIL … (51 §2.2)"},
+    "value": {"type": ["string", "number"], "maxLength": 200, "description": "자유 값(예 \"25.0→3.0 m/s\", 대기 분)"},
+    "s": {"type": ["number", "null"], "minimum": -1000000, "maximum": 1000000},
+    "speed": {"type": ["number", "null"], "minimum": -100, "maximum": 150},
+    "samples": {
+      "type": ["array", "null"], "maxItems": 20,
+      "description": "IMPACT 재검증용 [[상대초, m/s], …], 마지막 표본 = 0 초",
+      "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
+    },
+    "from": {"type": ["number", "null"], "minimum": -1000000, "maximum": 1000000, "description": "CHARGE_MOVED·CHARGE_REPORT: 실패했던 자리(m)"},
+    "sym": {"type": ["string", "null"], "maxLength": 32},
+    "place": {"type": ["string", "null"], "maxLength": 32},
+    "broken": {"type": ["string", "null"], "maxLength": 32},
+    "alt": {"type": ["string", "null"], "maxLength": 32},
+    "unit": {"type": ["number", "null"], "minimum": 0, "maximum": 99, "description": "충전기 번호(0 = 모름)"}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-respond.request",
+  "title": "POST /api/road/respond 요청",
+  "description": "충돌 뒤 \"괜찮으세요?\" 답. ok true = 이상 없음, false·null = 도움 필요·무응답.",
+  "type": "object",
+  "required": ["me"],
+  "properties": {
+    "me": {"type": "string", "minLength": 1, "maxLength": 64},
+    "t": {"type": "number", "minimum": 0},
+    "ok": {"type": ["boolean", "null"]},
+    "timeout": {"type": ["boolean", "null"]}
+  }
+}

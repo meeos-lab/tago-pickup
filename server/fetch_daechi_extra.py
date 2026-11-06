@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 from fetch_daechi_osm import BBOX, ENDPOINTS
+from pathlib import Path
 
 QUERY = f"""
 [out:json][timeout:90];
@@ -39,7 +40,7 @@ def main(out_path):
             req = urllib.request.Request(url, data=body, headers={"User-Agent": "pleos-meeos-prototype/0.1 (contest demo)"})
             with urllib.request.urlopen(req, timeout=120) as r:
                 data = json.loads(r.read().decode("utf-8"))
-            json.dump(data, open(out_path, "w", encoding="utf-8"), ensure_ascii=False)
+            Path(out_path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             print(f"ok {url} elements={len(data.get('elements', []))}")
             return
         except Exception as e:  # noqa: BLE001

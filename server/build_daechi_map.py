@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import sys
+from pathlib import Path
 
 BBOX = (37.4930, 127.0540, 37.5030, 127.0700)   # 남, 서, 북, 동
 LAT0, LON0 = 37.4980, 127.0620
@@ -56,7 +57,7 @@ def build_route(ways):
 
 
 def main(osm_path, hyd_path, out_path):
-    osm = json.load(open(osm_path, encoding="utf-8"))["elements"]
+    osm = json.loads(Path(osm_path).read_text(encoding="utf-8"))["elements"]
     roads, route_ways = [], []
     stops, crossings, signals, schools, cands = [], [], [], [], []
     for el in osm:
@@ -96,7 +97,7 @@ def main(osm_path, hyd_path, out_path):
         elif t.get("amenity") == "parking":
             cands.append({"lat": lat, "lon": lon, "kind": "parking", "icon": "parking", "name": name or "주차장 입구"})
         elif t.get("amenity") in ("prep_school", "school") or t.get("office") == "educational_institution":
-            if name and "학원" in name or "수학" in name or "어학" in name or "논술" in name or "두각" in name:
+            if name and ("학원" in name or "수학" in name or "어학" in name or "논술" in name or "두각" in name):   # 이름 없는 곳은 학원으로 보지 않는다
                 cands.append({"lat": lat, "lon": lon, "kind": "academy", "icon": "academy", "name": name, "academy": True})
 
     hydrants = []
@@ -119,7 +120,7 @@ def main(osm_path, hyd_path, out_path):
             "서울시 소방재난본부_소방용수시설_20251231 (서울 열린데이터광장, 공공누리 1유형) — 소화전",
         ],
     }
-    json.dump(out, open(out_path, "w", encoding="utf-8"), ensure_ascii=False)
+    Path(out_path).write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     print(f"route pts={len(route)} roads={len(roads)} busStops={len(stops)} crossings={len(crossings)} "
           f"signals={len(signals)} hydrants={len(hydrants)} schools={len(schools)} candidates={len(cands)}")
 

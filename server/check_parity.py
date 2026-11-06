@@ -8,6 +8,7 @@
 
 import json
 import sys
+import urllib.error
 import urllib.request
 
 CASES = [  # (대상, 이름, 와이퍼, 시각, 평일, 장소)
@@ -26,10 +27,20 @@ CASES = [  # (대상, 이름, 와이퍼, 시각, 평일, 장소)
 ]
 
 
+def call_status(base, path, body=None):
+    """call 과 같되 HTTP 오류도 (상태 코드, 본문) 으로 돌려준다 — 잘못된 입력 사례용"""
+    try:
+        return 200, call(base, path, body)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
 def call(base, path, body=None):
+    """base+path 에 JSON 을 보내고(body 가 None 이면 GET) 응답 JSON 을 돌려준다."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"})
-    return json.loads(urllib.request.urlopen(req, timeout=10).read())
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
 
 
 GLOBAL_CASES = [  # 해외 지역: 대상 3종 × 비 (시간대 규칙 없음)
@@ -61,7 +72,8 @@ def passed_case(base, kind, name, wiper, hhmm, weekday, spot, region):
 
 
 def run(base, region="daechi"):
-    pre = call(base, f"/api/presets?region={region}")
+    # PC 서버는 한 프로세스가 한 지역만 맡는다(?region= 무시) — 다른 지역으로 띄운 서버와 비교하지 않게 먼저 확인
+    assert call(base, f"/api/map?region={region}")["region"]["id"] == region, f"{base} 는 {region} 지역 서버가 아니다"; pre = call(base, f"/api/presets?region={region}")
     out = []
     for kind, name, wiper, hhmm, weekday, spot in (CASES if region == "daechi" else GLOBAL_CASES):
         sid = call(base, "/api/session", {"member": {"name": name, "type": kind}, "clock": {"hhmm": hhmm, "weekday": weekday}, "region": region})["id"]
@@ -93,6 +105,38 @@ def run(base, region="daechi"):
     return out
 
 
+def run_bad_input(base, region):
+    """잘못된 입력: 두 엔진이 같은 정리·같은 상태 코드를 내고, 거절한 요청이 세션을 바꾸지 않는지"""
+    out = []
+    pub = lambda sid: (lambda st: (st["member"]["name"], st["member"]["type"], st["clock"]["hhmm"], st["clock"]["weekday"], st["car"]["desc"]))(call(base, f"/api/session/{sid}"))
+    sid = call(base, "/api/session", {"member": {"name": "가" * 30, "type": "robot"}, "clock": {"hhmm": "99:99", "weekday": "no"}, "carDesc": "x" * 60, "region": region})["id"]
+    out.append(("생성 정리", pub(sid)))
+    sid2 = call(base, "/api/session", {"member": "not-an-object", "clock": {"hhmm": "07:05", "weekday": "FALSE"}, "region": region})["id"]
+    out.append(("생성 member 형", pub(sid2)))
+    for body in ({"hhmm": "x"}, {"hhmm": "24:00"}, {"hhmm": "07:60"}, {"hhmm": 730}, {"hhmm": "07:30", "weekday": "false"},
+                 {"hhmm": None}, {"hhmm": "07:30", "weekday": False}, {}):
+        code, _ = call_status(base, f"/api/session/{sid}/clock", body)
+        st_code, _ = call_status(base, f"/api/session/{sid}")
+        out.append((f"clock {json.dumps(body, ensure_ascii=False)}", code, st_code, pub(sid)))
+    # 진행·위치·경유지·메시지·탑승·근처 종류: 거절할 것은 400, 받은 것은 정리된 값만
+    full = lambda sid: (lambda st: (st["car"].get("progress"), st["car"].get("speed"), st["car"].get("gear"), st["rider"]["lat"], st["rider"]["lon"],
+                                    st.get("via"), st.get("riderDelay"), st.get("boarding"), st["status"]))(call(base, f"/api/session/{sid}"))
+    sid = call(base, "/api/session", {"member": {"name": "지수", "type": "child"}, "region": region})["id"]
+    steps = [("car", {"speed": "fast"}), ("car", {"progress": 10, "gear": 3}), ("car", {"progress": 12.5, "speed": 3, "gear": "D"}),
+             ("rider", {"lat": "37.5", "lon": 127.0}), ("rider", {"lat": 91, "lon": 127.0}), ("rider", {"lat": 37.4985, "lon": True}),
+             ("rider", {"lat": 37.4985, "lon": 127.0560}),
+             ("via", {"lat": 37.5}), ("via", {"lat": 37.5, "lon": "x"}), ("via", {"lat": 37.4990, "lon": 127.0550, "name": "가" * 50}), ("via", {"lat": None}),
+             ("message", {"text": "99999999999분만 기다려 주세요"}), ("message", {"text": "90분만"}), ("message", {"text": "3분만 기다려 주세요"}),
+             ("boarding", {"state": "flying"}), ("boarding", {"seatLabel": "2열"}),
+             ("boarding", {"state": "boarded", "seat": "ROW_2_RIGHT", "seatLabel": "2열 오른쪽", "belt": "yes", "evil": "x" * 100})]
+    for act, body in steps:
+        code, _ = call_status(base, f"/api/session/{sid}/{act}", body)
+        out.append((f"{act} {json.dumps(body, ensure_ascii=False)[:60]}", code, full(sid)))
+    out.append(("nearby 모르는 종류", call_status(base, f"/api/session/{sid}/nearby?kind=bogus")[0]))
+    out.append(("모르는 동작", call_status(base, f"/api/session/{sid}/teleport", {})[0], full(sid)))
+    return out
+
+
 def main(pc="http://127.0.0.1:8790", app="http://127.0.0.1:8791", region="daechi"):
     a, b = run(pc, region), run(app, region)
     bad = 0
@@ -102,7 +146,12 @@ def main(pc="http://127.0.0.1:8790", app="http://127.0.0.1:8791", region="daechi
         print(("OK  " if not diff else "DIFF"), case[0], case[2][:4], case[3], "평일" if case[4] else "주말", case[5], "|", x["best"][0] if x["best"] else "-", "" if not diff else diff)
         bad += bool(diff)
     print(f"{region}: {len(cases) - bad}/{len(cases)} 일치")
-    sys.exit(1 if bad else 0)
+    xa, xb = run_bad_input(pc, region), run_bad_input(app, region)
+    bad_in = [(p, q) for p, q in zip(xa, xb) if p != q]
+    for p, q in bad_in:
+        print("DIFF 잘못된 입력", p, "≠", q)
+    print(f"{region} 잘못된 입력: {len(xa) - len(bad_in)}/{len(xa)} 일치")
+    sys.exit(1 if bad or bad_in else 0)
 
 
 if __name__ == "__main__":

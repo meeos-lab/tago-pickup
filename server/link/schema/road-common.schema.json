@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-common",
+  "title": "길벗 도로 링크 응답 공통 정의(gilbeot-road/1)",
+  "description": "응답 스키마가 $ref 로 쓰는 조각. 응답은 확장에 열려 있다(additionalProperties 허용 — 새 필드를 더해도 옛 받는 쪽이 깨지지 않게). 필드 뜻은 docs/dev/51-api-spec.md 2.3·10절.",
+  "$defs": {
+    "api": {"const": "gilbeot-road/1", "description": "API 버전. 호환되는 더하기는 같은 값, 깨지는 변경은 /2"},
+    "latlon": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}, "description": "[위도, 경도] 도"},
+    "eventPosition": {
+      "type": "object",
+      "description": "ETSI EN 302 637-3 managementContainer.eventPosition 에 대응. s = 시연 경로상 거리(m, 1차원 도로 모델), lat·lon = 그 자리의 경로 위 점(도, 소수 6자리). DENM 의 ReferencePosition 은 1/10 µ도 정수(latitude = lat×10^7)",
+      "required": ["s", "lat", "lon"],
+      "properties": {
+        "s": {"type": "number"},
+        "lat": {"type": "number", "minimum": -90, "maximum": 90},
+        "lon": {"type": "number", "minimum": -180, "maximum": 180}
+      }
+    },
+    "relevanceDistance": {
+      "enum": ["lessThan50m", "lessThan100m", "lessThan200m", "lessThan500m", "lessThan1000m", "lessThan5km", "lessThan10km", "over10km"],
+      "description": "ETSI TS 102 894-2 RelevanceDistance(ENUMERATED 0~7)의 식별자 — ASN.1 JSON 인코딩 규칙(JER, ITU-T X.697)이 열거형을 식별자 글로 쓰는 것과 같다. 허브가 이 위험을 차에게 알리는 반경"
+    },
+    "hazard": {
+      "type": "object",
+      "required": ["id", "type", "label", "s", "pos", "ahead", "by", "anon", "cars", "confirmed", "level", "age",
+                   "informationQuality", "detectionTime", "validityDuration", "eventPosition", "relevanceDistance"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "label": {"type": "string"},
+        "s": {"type": "number"},
+        "pos": {"$ref": "#/$defs/latlon"},
+        "ahead": {"type": ["number", "null"]},
+        "by": {"type": "array", "items": {"type": "string"}},
+        "anon": {"type": "integer", "minimum": 0},
+        "cars": {"type": "integer", "minimum": 0},
+        "confirmed": {"type": "boolean"},
+        "level": {"type": "integer", "minimum": 1, "maximum": 2},
+        "age": {"type": "number"},
+        "say": {"type": "string"},
+        "causeCode": {"type": "integer", "minimum": 0, "maximum": 255, "description": "DENM situationContainer.eventType.causeCode"},
+        "informationQuality": {"type": "integer", "minimum": 0, "maximum": 7, "description": "DENM situationContainer.informationQuality"},
+        "queueWarn": {"type": "boolean", "description": "INCIDENT: 정체 꼬리 주의(DENM causeCode dangerousEndOfQueue 27 을 플래그로)"},
+        "detectionTime": {"type": "number", "minimum": 0, "description": "DENM managementContainer.detectionTime: 가장 최근에 이 사건을 감지(보고)한 논리 시각 t(epoch 초, 0.001 s 단위). DENM 의 TimestampIts 는 utcStartOf2004(2004-01-01T00:00:00Z) 부터의 ms — 윤초 처리는 조항 미확인"},
+        "validityDuration": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "DENM managementContainer.validityDuration: detectionTime 부터 센 유효 초. 만료 시각 = detectionTime + validityDuration, 지금부터 남은 초 = 그 값 − view.now"},
+        "eventPosition": {"$ref": "#/$defs/eventPosition"},
+        "relevanceDistance": {"$ref": "#/$defs/relevanceDistance"}
+      }
+    },
+    "view": {
+      "type": "object",
+      "required": ["me", "lang", "now", "s", "routeLength", "risk", "nearby", "hazards", "zones", "ahead", "restNext", "restHere", "group", "brief", "demo", "clockSkew", "units"],
+      "properties": {
+        "me": {"type": ["string", "null"]},
+        "lang": {"enum": ["ko", "en"]},
+        "now": {"type": "number"},
+        "s": {"type": ["number", "null"]},
+        "routeLength": {"type": "number"},
+        "risk": {"type": ["object", "null"]},
+        "nearby": {"type": "integer", "minimum": 0},
+        "hazards": {"type": "array", "items": {"$ref": "#/$defs/hazard"}},
+        "zones": {"type": "array"},
+        "ahead": {"type": ["object", "null"]},
+        "restNext": {"type": ["object", "null"]},
+        "restHere": {"type": ["string", "null"], "description": "차가 휴게소 충전소 반경 안이면 그 휴게소 이름, 아니면 null"},
+        "group": {"type": ["object", "null"]},
+        "brief": {},
+        "demo": {"type": "boolean"},
+        "clockSkew": {"type": ["integer", "null"], "description": "초. 이 차의 요청 t 가 허브 수신 시각 기준으로 CLOCK_SKEW_SEC(30) 넘게 어긋났을 때 그 차이(앞서면 양수). 없으면 null(ADR-43)"},
+        "units": {"enum": ["km", "mi"], "description": "이 차의 거리 단위(join units). 영어 거리 글에만 쓴다(ADR-45)"},
+        "ev": {"type": "object"}
+      }
+    }
+  }
+}

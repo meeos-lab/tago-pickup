@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Research log (warning-response log). Korean in values/strings_study.xml -->
+<resources>
+    <string name="btn_study_off">Research log · off</string>
+    <string name="btn_study_on">Research log · on</string>
+
+    <string name="hl_study_consent">Join the research log?</string>
+    <string name="sl_study_consent">Records how you respond to Gilbeot warnings · set up only while stopped</string>
+    <string name="study_consent_title">Consent</string>
+    <string name="study_consent_purpose">Purpose: to measure how much drivers actually slow down and follow the advised speed after a Gilbeot warning (possible crash, end of a jam, road-authority notice), replacing assumptions in our traffic simulation study with measured values.</string>
+    <string name="study_consent_what">Recorded: once a second from 30 s before to 120 s after a warning — speed, acceleration, turn signal, steering, warning type and remaining distance, when the warning was shown and spoken, and when you touched the screen.</string>
+    <string name="study_consent_not">Not recorded: name, plate number, location coordinates, start point, voice. Sessions are identified only by a random number.</string>
+    <string name="study_consent_where">Stored in this car’s app only. Export and server upload happen only when you turn them on.</string>
+    <string name="study_consent_stop">Stop any time: turn it off under [Research log] on the home screen.</string>
+
+    <string name="study_age_title">Age group</string>
+    <string name="study_age_10s">Teens</string>
+    <string name="study_age_20s">20s</string>
+    <string name="study_age_30s">30s</string>
+    <string name="study_age_40s">40s</string>
+    <string name="study_age_50s">50s</string>
+    <string name="study_age_60s">60s</string>
+    <string name="study_age_70plus">70+</string>
+    <string name="study_years_title">Driving experience</string>
+    <string name="study_years">%1$d yr</string>
+    <string name="study_car_title">Vehicle type</string>
+    <string name="study_car_sedan">Car</string>
+    <string name="study_car_suv">SUV</string>
+    <string name="study_car_van_truck">Van · truck</string>
+    <string name="study_car_other">Other</string>
+    <string name="btn_study_agree">Agree and start</string>
+    <string name="btn_study_decline">Don’t agree</string>
+
+    <string name="hl_study_on">Research log on</string>
+    <string name="sl_study_on">Session %1$s · %2$d warnings recorded</string>
+    <string name="sl_study_on_open">Session %1$s · %2$d warnings recorded · %3$d in progress</string>
+    <string name="btn_study_export">Export log</string>
+    <string name="study_upload_title">Server upload</string>
+    <string name="study_upload_off">Off</string>
+    <string name="study_upload_on">On</string>
+    <string name="study_upload_note">When on, each warning’s record is sent to the study server once it is complete</string>
+    <string name="study_upload_no_url">No upload address is set, so records stay in the app</string>
+    <string name="btn_study_stop">Turn off</string>
+    <string name="btn_study_close">Close</string>
+
+    <string name="toast_study_started">Research log started</string>
+    <string name="toast_study_stopped">Research log turned off</string>
+    <string name="toast_study_shared">Choose an app to share with</string>
+    <string name="toast_study_copied">Saved to the app folder: %1$s</string>
+    <string name="toast_study_empty">Nothing recorded yet</string>
+</resources>

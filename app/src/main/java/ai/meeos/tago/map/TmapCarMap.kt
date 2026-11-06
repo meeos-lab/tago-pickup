@@ -2,12 +2,10 @@ package ai.meeos.tago.map
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -23,7 +21,6 @@ import android.graphics.Point
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
-import android.widget.ImageView
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.skt.tmap.TMapInsets
@@ -35,8 +32,7 @@ import com.skt.tmap.overlay.TMapPolyLine
 import com.skt.tmap.overlay.TMapTrafficLine
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import ai.meeos.tago.net.Http
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -128,7 +124,7 @@ class TmapCarMap(
     private var busKey: String? = null
     private var fitKey: String? = null
     private var legendShown: Boolean? = null
-    private val bitmaps = HashMap<String, Bitmap>()
+    private val icons = TmapMarkerIcons(ctx, dp) { dark }   // 마커 그림 공장(캐시 포함)
 
     // 티맵 경로(실시간 교통): 목적지·경유지가 바뀔 때와 60초마다만 부른다(무료 한도 일 1,000건). 저장하지 않는다(약관: 24시간 넘게 쓰지 않음)
     private var tmKey: String? = null
@@ -198,7 +194,7 @@ class TmapCarMap(
     private val readyWatch = Runnable { if (!ready && !failed && !destroyed) { log("TMAP 지도가 15초 안에 준비되지 않아 웹 지도로"); failed = true; onFailed() } }
 
     fun show(sessionId: String?, night: Boolean) {
-        if (sessionId != null && !ready && !failed && !watchArmed) { watchArmed = true; main.postDelayed(readyWatch, 15_000) }
+        if (sessionId != null && !ready && !failed && !watchArmed) { watchArmed = true; main.postDelayed(readyWatch, READY_TIMEOUT_MS) }
         if (sessionId != sid) {
             sid = sessionId
             mapData = null; lastState = null
@@ -211,7 +207,7 @@ class TmapCarMap(
     fun setDark(night: Boolean) {
         if (night == dark) return
         dark = night
-        bitmaps.clear(); markerSig.keys.filter { !it.startsWith("_") }.forEach { map.removeTMapMarkerItem(it) }; runCatching { map.removeTMapMarkerItem("car") }; markerSig.clear()
+        icons.clear(); markerSig.keys.filter { !it.startsWith("_") }.forEach { map.removeTMapMarkerItem(it) }; runCatching { map.removeTMapMarkerItem("car") }; markerSig.clear()
         legendShown = null
         // 테마를 바꾸면 스타일을 새로 읽으니 POI 설정을 다시(스타일이 늦게 붙는 경우까지 두 번)
         if (ready) { map.setMapType(if (dark) TMapView.MapType.NIGHT else TMapView.MapType.DEFAULT); main.postDelayed({ tidyMap() }, 500); main.postDelayed({ tidyMap() }, 2500) }
@@ -318,7 +314,7 @@ class TmapCarMap(
         if (recenter.visibility != android.view.View.VISIBLE) { recenter.visibility = android.view.View.VISIBLE; styleRecenter() }
     }
 
-    private fun userBrowsing() = userAt > 0 && System.currentTimeMillis() - userAt < 20_000
+    private fun userBrowsing() = userAt > 0 && System.currentTimeMillis() - userAt < USER_BROWSE_MS
 
     /**
      * 시험 훅(디버그·시연 빌드, MainActivity --es gesture in|out|drag): 에뮬레이터 핀치를 그대로 흉내 낸다 —
@@ -425,7 +421,7 @@ class TmapCarMap(
                     }
                 }
             }
-            val nowMoving = (lastState?.optJSONObject("car")?.optDouble("speed", 0.0) ?: 0.0) > 0.5
+            val nowMoving = (lastState?.optJSONObject("car")?.optDouble("speed", 0.0) ?: 0.0) > MOVING_MS
             if (nowMoving != moving && ready) {
                 // 주행 중에는 지도를 손으로 움직이지 않는다(보기 전용, 자동 맞춤이 따라간다). 멈추면 다시 연다
                 moving = nowMoving
@@ -433,15 +429,11 @@ class TmapCarMap(
                 syncZoom()
                 if (moving) { userAt = 0L; styleRecenter() }
             }
-            main.postDelayed(this, if (nowMoving) 4000 else 2000)
+            main.postDelayed(this, if (nowMoving) POLL_MOVING_MS else POLL_STOPPED_MS)
         }
     }
 
-    private fun get(url: String): String {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 3000; c.readTimeout = 5000
-        return try { c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
-    }
+    private fun get(url: String): String = Http.text(url, connectMs = POLL_CONNECT_MS, readMs = POLL_READ_MS)
 
     // ---------------------------------------------------------------- 그리기
 
@@ -474,42 +466,43 @@ class TmapCarMap(
         val heading = cp?.optDouble("heading", 0.0)?.takeIf { !it.isNaN() } ?: 0.0
         // 내 차 = SDK 에 든 순정 커서 그림(VSM SDK location_marker: 흰 원 + 파란 화살표)을 마커로, 진행 방향으로 돌린다.
         // SDK 의 현재 위치 레이어(setIconVisibility)는 기본 그림이 작은 파란 공이고 회전을 쓰지 않아(실측) 쓰지 않는다
-        val car = Mk("car", carLL, cursor(), 0.5f, 0.5f, 3000f, rotation = heading.toFloat())   // 엔진 마커 회전 = 정북에서 시계 방향 각도(실측: 0 위 · 90 오른쪽 · 180 아래 · 270 왼쪽)
+        // 엔진 마커 회전 = 정북에서 시계 방향 0~360(실측: 0 위 · 90 오른쪽 · 180 아래 · 270 왼쪽). 엔진 heading 은 atan2 라 −180~180 → 음수(서쪽 성분)면 화살표가 위로 고정됐다 → 0~360 으로 바꿔 넘긴다
+        val car = Mk("car", carLL, icons.cursor(), 0.5f, 0.5f, 3000f, rotation = ((heading % 360 + 360) % 360).toFloat())
 
         val markers = ArrayList<Mk>()
         // 제외 지점(만날 곳 120m 안, 가까운 3곳) — 제안 중에만
         if (confirmed == null) {
             val ex = prop?.optJSONArray("excluded")
-            if (ex != null) (0 until ex.length()).map { ex.getJSONObject(it) }.filter { it.optDouble("dist", 1e9) <= 120 }.sortedBy { it.optDouble("dist") }.take(3).forEach { e ->
-                ll(e.opt("curb"))?.let { markers += Mk("ex:${e.optString("id")}", it, pin("tago_pin_excluded", 24, SMALL_PIN), 0.5f, PIN_TIP, 100f) }
+            if (ex != null) (0 until ex.length()).map { ex.getJSONObject(it) }.filter { it.optDouble("dist", 1e9) <= EXCLUDED_NEAR_M }.sortedBy { it.optDouble("dist") }.take(3).forEach { e ->
+                ll(e.opt("curb"))?.let { markers += Mk("ex:${e.optString("id")}", it, icons.pin("tago_pin_excluded", 24, SMALL_PIN), 0.5f, PIN_TIP, 100f) }
             }
         }
         for (p in picks) {
             if (p.cls == "best") {
                 // 목적지(추천·확정 만날 곳) = SDK 에 든 '도착' 핀(tmap end.png). 핀 끝(아래 가운데)이 점, 라벨은 핀 위
-                val pin = sdkPin("end")
+                val pin = icons.sdkPin("end")
                 markers += Mk("cand:${p.id}:${p.cls}", p.ll, pin, 0.5f, 1f, 500f)
-                markers += Mk("lbl:${p.id}:${p.cls}", p.ll, tag(p.label, p.cls, gap = (pin.height / dp).roundToInt() + 4, above = true), 0.5f, 1f, 2000f)
+                markers += Mk("lbl:${p.id}:${p.cls}", p.ll, icons.tag(p.label, p.cls, gap = (pin.height / dp).roundToInt() + 4, above = true), 0.5f, 1f, 2000f)
             } else {
                 // 대안은 목적지가 아니라 후보 — 후보 종류(편의점·카페…)별 v9 핀(SDK 도착 핀보다 조금 작게), 라벨은 핀 끝 아래
-                markers += Mk("cand:${p.id}:${p.cls}", p.ll, place(p.icon), 0.5f, PIN_TIP, 450f)   // 핀 끝이 점
-                markers += Mk("lbl:${p.id}:${p.cls}", p.ll, tag(p.label, p.cls, gap = 8, above = false), 0.5f, 0f, 2000f)
+                markers += Mk("cand:${p.id}:${p.cls}", p.ll, icons.place(p.icon), 0.5f, PIN_TIP, 450f)   // 핀 끝이 점
+                markers += Mk("lbl:${p.id}:${p.cls}", p.ll, icons.tag(p.label, p.cls, gap = 8, above = false), 0.5f, 0f, 2000f)
             }
         }
         // 경유(포장 매장)
         val via = s.optJSONObject("via")
         val viaLL = via?.let { LL(it.optDouble("lat"), it.optDouble("lon")) }
         if (via != null && viaLL != null) {
-            val pin = sdkPin("pass")   // 경유지 = SDK 에 든 '경유' 핀(tmap pass.png)
+            val pin = icons.sdkPin("pass")   // 경유지 = SDK 에 든 '경유' 핀(tmap pass.png)
             markers += Mk("via", viaLL, pin, 0.5f, 1f, 600f)
-            markers += Mk("lbl:via", viaLL, tag(t("경유 · ", "Stop · ") + via.optString("name"), "alt", gap = (pin.height / dp).roundToInt() + 4, above = true), 0.5f, 1f, 2000f)
+            markers += Mk("lbl:via", viaLL, icons.tag(t("경유 · ", "Stop · ") + via.optString("name"), "alt", gap = (pin.height / dp).roundToInt() + 4, above = true), 0.5f, 1f, 2000f)
         }
         // 기다리는 사람(차 화면에서는 상대 = ink)
         val rider = s.optJSONObject("rider")
         val riderLL = rider?.takeIf { !it.isNull("lat") }?.let { LL(it.optDouble("lat"), it.optDouble("lon")) }
         if (riderLL != null && !boardedLike) {
             val type = s.optJSONObject("member")?.optString("type") ?: "adult"
-            markers += Mk("rider", riderLL, pin("tago_person_" + (if (type == "senior") "senior" else if (type == "child") "child" else "adult"), 48, PLACE_PIN), 0.5f, PIN_TIP, 900f)
+            markers += Mk("rider", riderLL, icons.pin("tago_person_" + (if (type == "senior") "senior" else if (type == "child") "child" else "adult"), 48, PLACE_PIN), 0.5f, PIN_TIP, 900f)
         }
 
         // 정차 금지 반경·단속 CCTV: 만날 곳 주변만, 확정 뒤엔 없음
@@ -557,7 +550,7 @@ class TmapCarMap(
                     for (j in 0 until pts.length()) {
                         val p = pts.optJSONObject(j) ?: continue
                         val ll = LL(p.optDouble("lat"), p.optDouble("lon"))
-                        if (!near(ll, 70.0)) continue
+                        if (!near(ll, NO_STOP_NEAR_M)) continue
                         map.addTMapCircle(TMapCircle().apply {
                             id = "hz${n++}"
                             centerPoint = TMapPoint(ll.lat, ll.lon)
@@ -574,7 +567,7 @@ class TmapCarMap(
             for (j in 0 until cctv.length()) {
                 val p = cctv.optJSONObject(j) ?: continue
                 val ll = LL(p.optDouble("lat"), p.optDouble("lon"))
-                if (near(ll, 100.0)) markers += Mk("cam:$j", ll, pin(if (p.optBoolean("night")) "tago_pin_cctv_night" else "tago_pin_cctv", 24, SMALL_PIN), 0.5f, PIN_TIP, 90f)
+                if (near(ll, CCTV_NEAR_M)) markers += Mk("cam:$j", ll, icons.pin(if (p.optBoolean("night")) "tago_pin_cctv_night" else "tago_pin_cctv", 24, SMALL_PIN), 0.5f, PIN_TIP, 90f)
             }
         }
     }
@@ -585,17 +578,17 @@ class TmapCarMap(
             val key = "$to|${via ?: ""}"
             if (key != tmKey) { tmKey = key; tmLines = null; tmAt = 0L; tmRetryAt = 0L }
             val now = System.currentTimeMillis()
-            val due = tmAt == 0L || (moving && now - tmAt > 60_000)
+            val due = tmAt == 0L || (moving && now - tmAt > ROUTE_REFRESH_MS)
             if (!tmBusy && due && now >= tmRetryAt) {
                 tmBusy = true; tmAt = now
                 val from = carLL
                 netH.post {
-                    val lines = runCatching { fetchTmapRoute(from, to, via, heading) }.onFailure { log("티맵 노선을 못 받아 엔진 경로로: ${it.message}") }.getOrNull()
+                    val lines = runCatching { TmapRoute.fetch(TMAP_KEY_FOR_ROUTE ?: "", from, to, via, heading) }.onFailure { log("티맵 노선을 못 받아 엔진 경로로: ${it.message}") }.getOrNull()
                     if (lines != null) log("티맵 노선: " + lines.groupBy { it.first }.mapValues { (_, v) -> v.sumOf { it.second.size } }.toString() + " (혼잡도 → 점 수)")
                     main.post {
                         tmBusy = false
                         if (destroyed) return@post
-                        if (lines == null) tmRetryAt = System.currentTimeMillis() + 5 * 60_000   // 한도 초과(429)·오프라인이면 5분 쉰다 — 그동안 엔진 경로
+                        if (lines == null) tmRetryAt = System.currentTimeMillis() + ROUTE_BACKOFF_MS   // 한도 초과(429)·오프라인이면 5분 쉰다 — 그동안 엔진 경로
                         if (tmKey == key && lines != null) { tmLines = lines; lastState?.let { safeDraw(it) } }
                     }
                 }
@@ -614,34 +607,6 @@ class TmapCarMap(
         tl.setLineWidth(9)
         tl.setOutLineWidth(2)
         map.addTrafficLine(tl)
-    }
-
-    /** 티맵 자동차 경로 API(교통 포함). 혼잡도 0 정보없음 · 1 원활 · 2 서행 · 3 지체 · 4 정체 — SDK TrafficLine 은 0~3 이라 4 는 3 으로(공식 샘플과 같다) */
-    private fun fetchTmapRoute(from: LL, to: LL, via: LL?, heading: Double): List<Pair<Int, List<LL>>> {
-        val body = JSONObject().apply {
-            put("startX", from.lon); put("startY", from.lat); put("endX", to.lon); put("endY", to.lat)
-            put("reqCoordType", "WGS84GEO"); put("resCoordType", "WGS84GEO"); put("trafficInfo", "Y"); put("searchOption", 0)
-            put("angle", ((heading % 360 + 360) % 360).roundToInt()); put("directionOption", 1)   // 차가 보는 방향 우선(유턴 경로 방지)
-            if (via != null) put("passList", "${via.lon},${via.lat}")
-        }
-        val c = URL("https://apis.openapi.sk.com/tmap/routes?version=1").openConnection() as HttpURLConnection
-        c.requestMethod = "POST"; c.doOutput = true; c.connectTimeout = 5000; c.readTimeout = 8000
-        c.setRequestProperty("appKey", TMAP_KEY_FOR_ROUTE ?: ""); c.setRequestProperty("Content-Type", "application/json"); c.setRequestProperty("accept", "application/json")
-        val text = try { c.outputStream.use { it.write(body.toString().toByteArray()) }; if (c.responseCode != 200) error("HTTP ${c.responseCode}"); c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
-        val feats = JSONObject(text).optJSONArray("features") ?: error("빈 응답")
-        val out = ArrayList<Pair<Int, List<LL>>>()
-        for (i in 0 until feats.length()) {
-            val g = feats.getJSONObject(i).optJSONObject("geometry") ?: continue
-            if (g.optString("type") != "LineString") continue
-            val cs = g.getJSONArray("coordinates").let { a -> (0 until a.length()).map { LL(a.getJSONArray(it).getDouble(1), a.getJSONArray(it).getDouble(0)) } }
-            if (cs.size < 2) continue
-            val code = IntArray(cs.size - 1)
-            g.optJSONArray("traffic")?.let { tr -> for (k in 0 until tr.length()) { val r = tr.getJSONArray(k); for (x in r.getInt(0) until minOf(r.getInt(1), code.size)) code[x] = minOf(r.getInt(2), 3) } }
-            var start = 0
-            for (x in 1..code.size) if (x == code.size || code[x] != code[start]) { out += code[start] to cs.subList(start, x + 1); start = x }
-        }
-        if (out.isEmpty()) error("경로 없음")
-        return out
     }
 
     private fun drawWalk(walk: List<LL>) {
@@ -686,7 +651,7 @@ class TmapCarMap(
         if (!show) { legend.visibility = android.view.View.GONE; return }
         val rules = md.optJSONArray("rules") ?: JSONArray()
         val sb = SpannableStringBuilder()
-        (0 until rules.length()).map { rules.getJSONObject(it) }.filter { it.optDouble("radius", 999.0) < 100 }.take(3).forEachIndexed { i, r ->
+        (0 until rules.length()).map { rules.getJSONObject(it) }.filter { it.optDouble("radius", 999.0) < RULE_RADIUS_MAX_M }.take(3).forEachIndexed { i, r ->
             // 좁은 지도(세로 분할·Connect-L)에서 줄은 항목 사이에서만 바뀐다: 항목 안은 줄바꿈 없는 공백(NBSP)
             if (i > 0) sb.append("   ")
             val st = sb.length; sb.append("●$NBSP"); sb.setSpan(ForegroundColorSpan(LAYER_COLOR[r.optString("layer")] ?: Color.GRAY), st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -732,93 +697,14 @@ class TmapCarMap(
         id = m.id; icon = m.icon; setTMapPoint(TMapPoint(m.ll.lat, m.ll.lon, m.rotation)); setPosition(m.ax, m.ay); priority = 10000f - m.priority; setAnimation(false)
     })
 
-    /** 순정 커서 그림(VSM SDK 에 함께 든 location_marker 148×148 @xhdpi: 흰 원 + 파란 화살표 + 그림자) */
-    /** SDK 에 든 경로 핀(tmap-sdk res/drawable: start 출발 · end 도착 · pass 경유, 30×39 원본). 차 화면에서 보이게 순정 커서와 같은 비율로 키운다 */
-    private fun sdkPin(name: String): Bitmap = bitmaps.getOrPut("sdk:$name") {
-        val id = ctx.resources.getIdentifier(name, "drawable", ctx.packageName)
-        val src = (if (id != 0) BitmapFactory.decodeResource(ctx.resources, id, BitmapFactory.Options().apply { inScaled = false }) else null)
-            ?: return@getOrPut puck("pin", 48, "best")
-        val k = 1.6f * dp / WEB_SCALE   // 원본 30×39 → 약 48×62(밀도 1.0 기준)
-        Bitmap.createScaledBitmap(src, (src.width * k).roundToInt(), (src.height * k).roundToInt(), true)
-    }
-
-    /** SDK 에 없는 마커 = 사용자 v9 세트(res/drawable-nodpi/tago_place_*·tago_person_*·tago_pin_*.png, 기준 크기의 4배·투명, 단색 물방울 + 흰 실루엣).
-     *  모든 핀은 끝점이 위치(앵커 0.5, PIN_TIP). base = 그림의 기준 칸(48, 단속·제외 24), scale = 차 화면 배율(SDK 도착 핀이 1.6) */
-    private fun pin(res: String, base: Int, scale: Float): Bitmap = bitmaps.getOrPut("v9:$res:$scale") {
-        val id = ctx.resources.getIdentifier(res, "drawable", ctx.packageName)
-        val src = (if (id != 0) BitmapFactory.decodeResource(ctx.resources, id, BitmapFactory.Options().apply { inScaled = false }) else null)
-            ?: return@getOrPut puck("pin", base, "other")
-        val px = (base * scale * dp / WEB_SCALE).roundToInt()
-        Bitmap.createScaledBitmap(src, px, px, true).also { if (it !== src) src.recycle() }
-    }
-
-    /** 대안 후보 핀: 엔진 후보의 icon(종류) → v9 그림. 없는 종류는 원형 퍽(ORBIT 글리프) */
-    private fun place(icon: String): Bitmap {
-        val name = PLACE_ICON[icon] ?: return puck(icon, 44, "alt")
-        return pin("tago_place_$name", 48, PLACE_PIN)
-    }
-
-    private fun cursor(): Bitmap = bitmaps.getOrPut("cursor") {
-        val id = ctx.resources.getIdentifier("location_marker", "drawable", ctx.packageName)
-        (if (id != 0) BitmapFactory.decodeResource(ctx.resources, id) else null) ?: puck("navigation", 44, "best")
-    }
-
-    /** 원형 퍽(docs/ui-design.md §9): kind = other(ink) · best(green 테) · sure(green 채움) · alt/via(orange 테) · no(제외) · cam(단속) */
-    private fun puck(icon: String, sizeDp: Int, kind: String): Bitmap = bitmaps.getOrPut("p:$icon:$sizeDp:$kind:$dark") {
-        val face = if (dark) Color.parseColor("#1C1C1C") else Color.WHITE
-        val (fill, ring, ringDp, glyph) = when (kind) {
-            "best" -> Quad(face, GREEN, 4f, GREEN)
-            "sure" -> Quad(GREEN, face, 3f, Color.WHITE)
-            "alt", "via" -> Quad(face, ORANGE, 4f, ORANGE)
-            "no" -> Quad(face, GRAY9E, 2f, GRAY9E)
-            "cam" -> Quad(face, GRAY9E, 2f, Color.parseColor("#6E6E6E"))
-            else -> Quad(if (dark) Color.parseColor("#E8E8E8") else Color.BLACK, face, 3f, if (dark) Color.parseColor("#111111") else Color.WHITE)
-        }
-        val sz = (sizeDp * dp).roundToInt()
-        val b = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888)
-        val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        val r = sz / 2f
-        p.color = ring; c.drawCircle(r, r, r, p)
-        p.color = fill; c.drawCircle(r, r, r - ringDp * dp, p)
-        val resId = ctx.resources.getIdentifier("ic_$icon", "drawable", ctx.packageName).takeIf { it != 0 }
-            ?: ctx.resources.getIdentifier("ic_pin", "drawable", ctx.packageName)
-        ctx.getDrawable(resId)?.mutate()?.let { d ->
-            d.setTint(glyph)
-            val g = (sz * 0.56f).roundToInt(); val o = (sz - g) / 2
-            d.setBounds(o, o, o + g, o + g); d.draw(c)
-        }
-        b
-    }
-
-    /** 라벨(직각 태그): 흰 면 + 뜻 색 테두리(추천·확정 green, 대안 orange) + 진한 글. 퍽 쪽으로 gap 만큼 투명 여백을 둬 앵커(아래/위 가운데)가 점에 오게 한다 */
-    private fun tag(text: String, cls: String, gap: Int, above: Boolean): Bitmap = bitmaps.getOrPut("t:$text:$cls:$gap:$above:$dark") {
-        val border = when (cls) { "best" -> if (dark) Color.parseColor("#00E074") else GREEN; "alt" -> ORANGE; else -> if (dark) Color.parseColor("#3A3A3A") else Color.parseColor("#D4D4D4") }
-        val ink = when (cls) { "best" -> if (dark) Color.parseColor("#00E074") else Color.parseColor("#0E6B3F"); "alt" -> if (dark) ORANGE else Color.parseColor("#8A4B00"); else -> if (dark) Color.parseColor("#F2F2F2") else Color.BLACK }
-        val bw = if (cls == "best" || cls == "alt") 2 * dp else 1 * dp
-        val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 18 * dp; typeface = Typeface.DEFAULT_BOLD; color = ink }
-        val fm = tp.fontMetrics
-        val w = (tp.measureText(text) + 2 * 10 * dp + 2 * bw).roundToInt()
-        val h = ((fm.descent - fm.ascent) + 2 * 4 * dp + 2 * bw).roundToInt()
-        val g = (gap * dp).roundToInt()
-        val b = Bitmap.createBitmap(w, h + g, Bitmap.Config.ARGB_8888)
-        val c = Canvas(b)
-        val top = if (above) 0f else g.toFloat()
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = border; c.drawRect(RectF(0f, top, w.toFloat(), top + h), p)
-        p.color = if (dark) Color.parseColor("#1C1C1C") else Color.WHITE; c.drawRect(RectF(bw, top + bw, w - bw, top + h - bw), p)
-        c.drawText(text, bw + 10 * dp, top + bw + 4 * dp - fm.ascent, tp)
-        b
-    }
-
     // ---------------------------------------------------------------- 맞춤
 
     private fun fit(pts: List<LL>) {
-        if (pts.size < 2) { map.setCenterPoint(pts[0].lat, pts[0].lon); map.zoomLevel = 16; return }
+        if (pts.size < 2) { map.setCenterPoint(pts[0].lat, pts[0].lon); map.zoomLevel = FIT_SINGLE_ZOOM; return }
         val bounds = map.getBoundsFromPoints(ArrayList(pts.map { TMapPoint(it.lat, it.lon) })) ?: return
         // 여백: 좌우 150(긴 라벨이 잘리지 않게)·위아래 60, 왼쪽 아래 범례 자리
         map.fitBounds(bounds, TMapInsets(px(150), px(60), px(150), px(60)))
-        main.postDelayed({ if (map.zoomLevel > 17) map.zoomLevel = 17 }, 600)   // 너무 가까이 붙지 않게(웹 지도 최대 줌과 같다)
+        main.postDelayed({ if (map.zoomLevel > FIT_MAX_ZOOM) map.zoomLevel = FIT_MAX_ZOOM }, 600)   // 너무 가까이 붙지 않게(웹 지도 최대 줌과 같다)
     }
 
     private fun inView(p: LL, inset: Double): Boolean = runCatching {
@@ -842,22 +728,36 @@ class TmapCarMap(
     private fun JSONObject.centerLL(): LL = optJSONArray("center")?.let { LL(it.getDouble(0), it.getDouble(1)) } ?: LL(37.4985, 127.0605)
 
     data class LL(val lat: Double, val lon: Double) { override fun toString() = "%.6f,%.6f".format(lat, lon) }
-    private data class Quad(val a: Int, val b: Int, val c: Float, val d: Int)
 
     companion object {
         /** 경로 API 를 부를 앱키 — MainActivity 가 BuildConfig.TMAP_KEY 로 넣는다 */
         var TMAP_KEY_FOR_ROUTE: String? = null
-        private const val WEB_SCALE = 1.375f
+        private const val POLL_CONNECT_MS = 3000   // 내장 서버 상태 폴링(같은 기기)
+        private const val POLL_READ_MS = 5000
+        private const val POLL_STOPPED_MS = 2000L       // 상태 폴링 간격: 서 있을 때
+        private const val POLL_MOVING_MS = 4000L        // 달릴 때(지도는 엔진 경로로 보간)
+        private const val MOVING_MS = 0.5               // m/s — 이보다 빠르면 달리는 중
+        private const val READY_TIMEOUT_MS = 15_000L    // TMAP 이 이 안에 준비되지 않으면 웹 지도로
+        private const val USER_BROWSE_MS = 20_000L      // 손으로 만진 뒤 자동 맞춤을 쉬는 시간
+        private const val ROUTE_REFRESH_MS = 60_000L    // 달리는 중 티맵 노선 다시 받기
+        private const val ROUTE_BACKOFF_MS = 5 * 60_000L   // 티맵 노선 실패(429·오프라인) 뒤 쉬는 시간 — 그동안 엔진 경로
+        private const val FIT_SINGLE_ZOOM = 16          // 점 하나만 맞출 때 줌
+        private const val FIT_MAX_ZOOM = 17             // 맞춘 뒤 이보다 가까이 붙지 않게(웹 지도 최대 줌과 같게)
+        private const val NO_STOP_NEAR_M = 70.0         // 만날 곳 근처에만 정차 금지 표시
+        private const val CCTV_NEAR_M = 100.0           // 만날 곳 이 안의 단속 CCTV 만
+        private const val RULE_RADIUS_MAX_M = 100.0     // 범례에 넣는 규칙: 반경이 이보다 작은 것(소화전 5 m 등)
+        private const val EXCLUDED_NEAR_M = 120.0       // 제외 후보 핀: 기다리는 사람 이 안만
+        internal const val WEB_SCALE = 1.375f
         private val TOUCH_LOG = ai.meeos.tago.BuildConfig.DEMO_HOOKS   // 터치·핀치 진단 로그(디버그·시연 빌드)
         private const val NBSP = ' '
         // 한글은 음절마다 줄이 바뀔 수 있어("교차/로") 어절 안의 공백뿐 아니라 글자 사이에도 줄바꿈 금지(WORD JOINER)를 넣는다
         private fun String.nb() = replace(' ', NBSP).toList().joinToString("⁠")
         private const val PIN_TIP = 172f / 192f   // v9 핀 끝의 세로 위치(192 그림의 172 px = 0.896, 작은 핀도 같은 비율)
-        private const val PLACE_PIN = 1.4f        // 대안 후보·사람 핀: 48 기준 → 67 px(SDK 도착 핀 1.6 보다 조금 작게)
+        internal const val PLACE_PIN = 1.4f        // 대안 후보·사람 핀: 48 기준 → 67 px(SDK 도착 핀 1.6 보다 조금 작게)
         private const val SMALL_PIN = 1.6f        // 단속·제외 핀: 24 기준 → 38 px
 
         /** 엔진 후보 종류(icon) → v9 그림 이름(tago_place_*). 지금 데이터에 있는 종류 + 앞으로 넣을 종류(엔진 kind 이름과 v9 이름 둘 다) */
-        private val PLACE_ICON = mapOf(
+        internal val PLACE_ICON = mapOf(
             "convenience" to "store", "store" to "store", "cafe" to "cafe", "pharmacy" to "pharmacy", "parking" to "parking", "subway" to "subway",
             "academy" to "school_back_gate",
             "fast_food" to "fastfood", "fastfood" to "fastfood", "bakery" to "bakery", "bank" to "bank", "library" to "library",
@@ -874,9 +774,9 @@ class TmapCarMap(
         )
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
-        private val GREEN = Color.parseColor("#02C265")
-        private val ORANGE = Color.parseColor("#FF8A00")
-        private val GRAY9E = Color.parseColor("#9E9E9E")
+        internal val GREEN = Color.parseColor("#02C265")
+        internal val ORANGE = Color.parseColor("#FF8A00")
+        internal val GRAY9E = Color.parseColor("#9E9E9E")
         private val LAYER_COLOR = mapOf("hydrants" to Color.parseColor("#F62E24"), "busStops" to Color.parseColor("#FF8A00"), "crossings" to Color.parseColor("#7A5CFF"),
             "signals" to Color.parseColor("#C2185B"), "stops" to Color.parseColor("#8E44AD"), "schools" to Color.parseColor("#D4A20A"))
         private val LAYER_NAME = mapOf("hydrants" to ("소화전" to "Fire hydrant"), "busStops" to ("버스정류장" to "Bus stop"), "crossings" to ("횡단보도" to "Crosswalk"),

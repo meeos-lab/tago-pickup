@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-view.query",
+  "title": "GET /api/road · GET /api/road/world 쿼리",
+  "description": "쿼리 값은 글이다. t 는 십진수 글(지수 표기·부호 없음)만 받는다 — 두 엔진의 숫자 해석(Python float · Kotlin toDoubleOrNull)이 다른 입력(\"1_0\"·\"0x1p3\"·\"1d\"·\"nan\")을 없앤다. 빈 t 는 없는 것으로 본다.",
+  "type": "object",
+  "properties": {
+    "me": {"type": "string", "maxLength": 64},
+    "t": {"type": "string", "maxLength": 32, "pattern": "^([0-9]+(\\.[0-9]+)?)?$"}
+  }
+}

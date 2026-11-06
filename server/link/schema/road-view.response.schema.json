@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-view.response",
+  "title": "view 응답 — POST /api/road/{state,event,respond,official,demo} · GET /api/road",
+  "allOf": [{"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/view"}],
+  "required": ["api"],
+  "properties": {"api": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/api"}}
+}

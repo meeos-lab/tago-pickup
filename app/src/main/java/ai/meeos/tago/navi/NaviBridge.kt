@@ -29,6 +29,9 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
     private var wantSchoolZone = false
     /** 해외 지역 내비 요청: 시험(navi_all) 중이거나 아직 실패한 적이 없을 때만(에뮬레이터 내비 위치가 국내 고정) */
     private var overseasFailed = false
+    /** 순정 내비가 마지막으로 알린 현재 도로 제한속도(km/h). null = 아직 안 옴·모름. 메인 스레드에서만 바뀐다 */
+    var speedLimitKmh: Int? = null
+        private set
     private val prefs get() = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     var allowOverseas: Boolean
         get() = prefs.getBoolean("naviAll", false)
@@ -55,9 +58,9 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
                     runCatching {
                         navi?.addWaypoint(RequestWaypointInfo(latitude = c.getDouble(0), longitude = c.getDouble(1), waypointIndex = WaypointIndex.FIRST,
                             poiId = "", poiName = "${stop.getString("name")} (Tago)", poiSubId = "0", address = ""))
-                    }.onSuccess { log.d("내비 경유지 추가: ${stop.getString("name")}") }.onFailure { log.d("경유지 추가 실패: ${it.message}") }
+                    }.onSuccess { log.d("내비 경유지 추가"); log.demo("내비 경유지: ${stop.getString("name")}") }.onFailure { log.d("경유지 추가 실패: ${it.message}") }
                     // 경유지 재탐색 뒤 onRouteStarted가 다시 오지 않을 수 있어(에뮬 실측) 잠시 뒤 스쿨존 단계로 넘어간다
-                    if (wantSchoolZone) main.postDelayed({ applySchoolZone() }, 5000)
+                    if (wantSchoolZone) main.postDelayed({ if (!released) applySchoolZone() }, SCHOOL_ZONE_DELAY_MS)
                 } else applySchoolZone()
             }
         }
@@ -66,6 +69,11 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
         override fun onRouteStateInfo(routeStateInfo: RouteStateInfo) {
             val evs = routeStateInfo.trafficStatus?.trafficEventList ?: return
             main.post { onTrafficEvents?.invoke(evs) }
+        }
+        override fun onCurrentRoadSpeedLimit(speedLimit: Int) {
+            // 현재 도로 제한속도(km/h). 0 이하 = 모름. 도로 링크가 1 s 상태에 실어 허브가 정체 꼬리 권고 속도(80)를 이 값으로 상한한다(ADR-44).
+            // 에뮬레이터 내비는 위치가 고정이라 실제로 오는지는 미확인(실차 검증 전) — 오면 로그에 남긴다
+            main.post { val v = speedLimit.takeIf { it > 0 }; if (v != speedLimitKmh) { speedLimitKmh = v; log.d("내비 제한속도: ${v ?: "모름"}") } }
         }
         override fun onCautionPointInfo(cautionPointList: List<CautionPoint>) {
             // 위험성(설계 10판 ④) 입력 후보: 미끄럼·노면 파손 주의 지점. 지금은 기록만
@@ -108,14 +116,14 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
         pendingStop = stop                         // 경유지는 목적지 경로가 잡힌 뒤(onRouteStarted)에 넣는다
         runCatching {
             navi?.requestRoute(info(lat, lon, poiName))
-            log.d("내비: 목적지 $poiName${if (stop != null) " · 경유 ${stop.getString("name")}" else ""}${if (schoolZone) " · 스쿨존 경로" else ""}")
+            log.d("내비: 목적지 안내${if (stop != null) " · 경유 1곳" else ""}"); log.demo("내비: 목적지 $poiName${if (stop != null) " · 경유 ${stop.getString("name")}" else ""}${if (schoolZone) " · 스쿨존 경로" else ""}")
         }.onFailure { log.d("내비 경유 안내 실패: ${it.message}") }
         return true
     }
 
     /** 휴게소처럼 국내 경로가 확실한 목적지: 지역 설정과 무관하게 요청 */
     fun routeDomestic(lat: Double, lon: Double, poiName: String) {
-        runCatching { navi?.requestRoute(info(lat, lon, poiName)); log.d("내비: 목적지 $poiName") }
+        runCatching { navi?.requestRoute(info(lat, lon, poiName)); log.d("내비: 목적지 안내"); log.demo("내비: 목적지 $poiName") }
             .onFailure { log.d("내비 안내 실패: ${it.message}") }
     }
 
@@ -124,10 +132,16 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
     private fun info(lat: Double, lon: Double, poiName: String) =
         RouteInfo(latitude = lat, longitude = lon, displayLongitude = null, displayLatitude = null, poiName = poiName, poiId = "", poiSubId = "0", address = "")
 
+    @Volatile private var released = false   // 해제 뒤 미뤄 둔 작업(스쿨존 옵션)이 돌지 않게
+
     fun release() {
+        released = true
         runCatching { navi?.removeListener(listener) }
         runCatching { navi?.release() }
     }
 
-    companion object { const val PREFS = "tago" }
+    companion object {
+        const val PREFS = "tago"
+        private const val SCHOOL_ZONE_DELAY_MS = 5000L   // 경로가 잡힌 뒤 스쿨존 옵션을 거는 시간
+    }
 }

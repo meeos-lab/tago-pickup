@@ -9,6 +9,7 @@ Pleos 디자인 가이드: 아이콘은 1~2단어 라벨과 함께, OS 경고등
 """
 import os
 import re
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ORBIT = os.path.join(HERE, "icons", "orbit")
@@ -26,7 +27,7 @@ def load():
         if not f.endswith(".svg"):
             continue
         name = f[:-4]
-        s = open(os.path.join(ORBIT, "icons", f), encoding="utf-8").read()
+        s = Path(ORBIT, "icons", f).read_text(encoding="utf-8")
         els = []
         for m in re.finditer(r"<(path|circle)\b([^>]*)/?>", s):
             tag, attrs = m.group(1), m.group(2)
@@ -36,17 +37,21 @@ def load():
             else:
                 els.append((a["d"], a.get("fill-rule") == "evenodd"))
         icons[name] = els
-        mk = open(os.path.join(ORBIT, "markers", f), encoding="utf-8").read()
+        mk = Path(ORBIT, "markers", f).read_text(encoding="utf-8")
         colors[name] = re.search(r"fill='(#[0-9A-Fa-f]{6})'", mk).group(1)
     return icons, colors
 
 
+SVG_EVENODD = ' fill-rule="evenodd"'          # f-string 식 안에 백슬래시를 쓰지 않게(3.11 이하 문법 오류)
+VD_EVENODD = ' android:fillType="evenOdd"'
+
+
 def svg_inner(els):
-    return "".join(f'<path d="{d}" fill="currentColor"{" fill-rule=\"evenodd\"" if eo else ""}/>' for d, eo in els)
+    return "".join(f'<path d="{d}" fill="currentColor"{SVG_EVENODD if eo else ""}/>' for d, eo in els)
 
 
 def vector_xml(els):
-    paths = "\n".join(f'        <path android:pathData="{d}" android:fillColor="#FFFFFFFF"{" android:fillType=\"evenOdd\"" if eo else ""} />'
+    paths = "\n".join(f'        <path android:pathData="{d}" android:fillColor="#FFFFFFFF"{VD_EVENODD if eo else ""} />'
                       for d, eo in els)
     return ('<?xml version="1.0" encoding="utf-8"?>\n<!-- server/icons.py가 ORBIT 심볼(server/icons/orbit)에서 만든 파일. 직접 고치지 말 것 -->\n'
             '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
@@ -60,12 +65,12 @@ if __name__ == "__main__":
              + "".join(f"  {n}: '{svg_inner(e)}',\n" for n, e in icons.items())
              + "};\nconst ICON_COLORS = {" + ", ".join(f"{n}: '{c}'" for n, c in colors.items()) + "};\n/* ICONS:END */")
     for page in (os.path.join(HERE, "rider.html"), os.path.join(HERE, "link", "link.html")):   # 픽업 페이지 + 함께 가기 페이지
-        s = open(page, encoding="utf-8").read()
+        s = Path(page).read_text(encoding="utf-8")
         s, n = re.subn(r"/\* ICONS:BEGIN.*?/\* ICONS:END \*/", lambda m: block, s, flags=re.S)
         assert n == 1, f"{page}에 ICONS 블록 표시가 없다"
-        open(page, "w", encoding="utf-8").write(s)
+        Path(page).write_text(s, encoding="utf-8")
     res = os.path.join(HERE, "..", "app", "src", "main", "res", "drawable")
     os.makedirs(res, exist_ok=True)
     for name, els in icons.items():
-        open(os.path.join(res, f"ic_{name}.xml"), "w", encoding="utf-8").write(vector_xml(els))
+        Path(res, f"ic_{name}.xml").write_text(vector_xml(els), encoding="utf-8")
     print(f"ORBIT {len(icons)}개 → rider.html, link/link.html, res/drawable")

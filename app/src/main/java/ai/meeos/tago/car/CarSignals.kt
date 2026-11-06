@@ -28,6 +28,9 @@ class CarSignals(private val context: Context, private val main: Handler, privat
 
     var speedMs = 0f
         private set
+    /** 실제 차속 콜백(PERF_VEHICLE_SPEED)을 마지막으로 받은 시각(elapsedRealtime ms, 0 = 아직 없음). 연구 기록이 속도 출처를 가른다 */
+    @Volatile var speedEventAt = 0L
+        private set
     /** 시연 주행(convoy_sim): null 이 아니면 실제 차속 대신 이 값을 쓴다 */
     var simulatedSpeed: Float? = null
         set(v) { field = v; if (v != null) speedMs = v }
@@ -42,15 +45,17 @@ class CarSignals(private val context: Context, private val main: Handler, privat
     var rearDoorOpened = false
     // 도로 링크 신호(도로 링크 중에만 읽는다): 조향각(낙하물 회피), 브레이크 페달(긴 내리막), 공조 내기순환(연기·매연)
     var readRoadSignals = false
-    // 충돌 감지(docs/incident-judgment-design.md 10-1): 도로 링크 중 차속을 10 Hz 로 받아, 두 표본 사이 평균 감속률 ≥ 14 m/s² 이고 Δv ≥ 2.2 m/s(8 km/h),
-    // 간격 0.08~0.5 s 이면 후보 → 그 뒤 0.5 s 동안 속도가 사건 전의 50 % 아래로 머물면 충돌(한 표본 튐 제외). 제동 한계(1.1 g = 10.8 m/s²)와 30 % 여유
-    var onImpact: ((pre: Float, now: Float, samples: List<Pair<Long, Float>>) -> Unit)? = null
-    private val fast = ArrayDeque<Pair<Long, Float>>()      // (ms, m/s) 최근 2.5초
+
+    /** 1·2열 창문 위치(Vehicle Window.getCurrentWindowPosition, 0 = 닫힘). 도로 링크 중 3초마다 읽는다 — 비·침수·연기 안내에 '창문을 닫아 주세요'를 붙인다.
+     *  앱은 창문을 닫지 않는다: SDK 에 setWindowPosition 이 있지만 조사 노트 기준 창문 닫기 제어는 '준비 중'이고, 움직이는 창문은 끼임 위험이 있어 운전자에게 맡긴다 */
+    val windowPos = HashMap<WindowValue, Int>()
+    val openWindows: List<WindowValue> get() = windowPos.filterValues { it > 0 }.keys.sortedBy { it.ordinal }
+    /** 충돌 감지기(10 Hz 차속 → 충돌 확정). 규칙은 ImpactDetector */
+    private val impact = ImpactDetector { log.d(it) }
+    var onImpact: ((pre: Float, now: Float, samples: List<Pair<Long, Float>>) -> Unit)?
+        get() = impact.onImpact
+        set(v) { impact.onImpact = v }
     private var fastOn = false
-    private var cand: Triple<Long, Float, Float>? = null    // 후보 (시각 ms, 사건 전 속도, 후보 속도)
-    private var impactAt = 0L
-    var fastDrops = 0                                       // 10 Hz 표본 손실(간격 > 250 ms) 수 — 개발 패널용
-        private set
     var airbagSim: Boolean? = null                          // 시연 훅(에뮬레이터 VHAL 에 에어백 전개 속성이 없다)
     private var simUntil = 0L                               // impact_sim 표본을 넣는 동안(1.5 s) 실제 표본 무시
     var steerAngle: Float? = null
@@ -59,6 +64,11 @@ class CarSignals(private val context: Context, private val main: Handler, privat
         private set
     var recirc: Boolean? = null
         private set
+    /** 방향지시등 OFF/LEFT/RIGHT(Pleos TurnSignal, CAR_LIGHTS). 연구 기록(차로 변경 후보)이 켜져 있을 때만 읽는다. 못 읽으면 null */
+    var turnSignal: String? = null
+        private set
+    var onTurnSignal: ((String) -> Unit)? = null
+    private var turnListener: ai.pleos.playground.vehicle.listener.TurnSignalStateListener? = null
     // EV 충전(도로 링크 중, 5초마다): 충전구 열림(꽂음)·충전 스위치(충전 중)·배터리 %(Pleos SDK EvBattery, CAR_ENERGY).
     // 시연: 에뮬레이터 Virtual Console 은 충전 상태를 바꾸는 조작이 없어 `--es ev_sim` 훅으로 값을 넣는다(simCharge*)
     var simChargePort: Boolean? = null
@@ -96,7 +106,7 @@ class CarSignals(private val context: Context, private val main: Handler, privat
 
     private val speedCallback = object : CarPropertyManager.CarPropertyEventCallback {
         override fun onChangeEvent(value: CarPropertyValue<*>) {
-            (value.value as? Float)?.let { v -> main.post { if (simulatedSpeed == null) speedMs = v } }   // 시연 주행 중에는 대본 속도
+            (value.value as? Float)?.let { v -> speedEventAt = android.os.SystemClock.elapsedRealtime(); main.post { if (simulatedSpeed == null) speedMs = v } }   // 시연 주행 중에는 대본 속도
         }
 
         override fun onErrorEvent(propId: Int, zone: Int) = Unit
@@ -107,12 +117,35 @@ class CarSignals(private val context: Context, private val main: Handler, privat
         override fun onChangeEvent(value: CarPropertyValue<*>) {
             val v = value.value as? Float ?: return
             val ms = value.timestamp / 1_000_000
+            speedEventAt = android.os.SystemClock.elapsedRealtime()
             main.post {
                 if (simulatedSpeed == null) speedMs = v
                 if (android.os.SystemClock.elapsedRealtime() >= simUntil) feedFast(ms, v)   // 충돌 시연 표본을 넣는 동안은 실제(VC) 표본을 섞지 않는다
             }
         }
         override fun onErrorEvent(propId: Int, zone: Int) = Unit
+    }
+
+    /** 연구 기록 중에만: 방향지시등 변화를 받는다(콜백 + 1초 읽기 둘 다 — 콜백이 빠져도 1초 안에 잡힌다. 에뮬레이터 Virtual Console 깜빡이로 확인 2026-11-04) */
+    fun setTurnSignalWatch(on: Boolean) {
+        val v = vehicle ?: return
+        runCatching {
+            if (on && turnListener == null) {
+                val l = object : ai.pleos.playground.vehicle.listener.TurnSignalStateListener {
+                    override fun onTurnSignalStateUpdated(state: ai.pleos.playground.vehicle.constant.area.TurnSignalValue?) { if (state != null) main.post { setTurn(state.name) } }
+                    override fun onFailed(e: Exception) { main.post { log.d("방향지시등 읽기 실패: ${e.message}") } }
+                }
+                turnListener = l
+                v.getTurnSignal().registerTurnSignalState(l)
+            } else if (!on) turnListener?.let { v.getTurnSignal().unregisterTurnSignalState(it); turnListener = null }
+        }.onFailure { log.d("방향지시등 구독 실패: ${it.message}") }
+        if (!on) turnSignal = null
+    }
+
+    private fun setTurn(name: String) {
+        if (name == turnSignal) return
+        turnSignal = name
+        onTurnSignal?.invoke(name)
     }
 
     fun setFastSpeed(on: Boolean) {
@@ -122,40 +155,16 @@ class CarSignals(private val context: Context, private val main: Handler, privat
         @Suppress("DEPRECATION")
         runCatching { if (on) m.registerCallback(fastCallback, VehiclePropertyIds.PERF_VEHICLE_SPEED, CarPropertyManager.SENSOR_RATE_FASTEST) else m.unregisterCallback(fastCallback) }
             .onFailure { log.d("속도 10Hz ${if (on) "구독" else "해제"} 실패: $it") }
-        fast.clear(); cand = null
+        impact.reset()
     }
 
     /** 표본 하나를 감지기에 넣는다(실차 콜백·시연 훅 공용). 시각은 ms */
-    fun feedFast(ms: Long, v: Float) {
-        fast.lastOrNull()?.let { if (ms - it.first > 250) fastDrops++ }
-        fast.addLast(ms to v)
-        while (fast.size > 1 && ms - fast.first().first > 2500) fast.removeFirst()
-        val c = cand
-        if (c != null) {
-            // 후보 뒤 0.5 s: 하나라도 사건 전 속도의 50 % 이상이면 튐으로 버린다. 0.5 s 를 넘기면 충돌 확정
-            if (v >= 0.5f * c.second) { cand = null; return }
-            if (ms - c.first >= IMPACT_HOLD_MS) {
-                cand = null; impactAt = ms
-                log.d("감지: 충돌 — %.1f→%.1f m/s (10Hz 표본, 0.5초 유지)".format(c.second, c.third))
-                onImpact?.invoke(c.second, c.third, fast.toList())
-            }
-            return
-        }
-        if (ms - impactAt < 10_000) return                  // 10 s 에 한 번
-        var k = fast.size - 2
-        while (k >= 0) {
-            val (tk, vk) = fast.elementAt(k)
-            val dt = (ms - tk) / 1000.0
-            if (dt > IMPACT_DT_MAX) break
-            if (dt >= IMPACT_DT_MIN && vk - v >= IMPACT_DV && (vk - v) / dt >= IMPACT_A) { cand = Triple(ms, vk, v); return }
-            k--
-        }
-    }
+    fun feedFast(ms: Long, v: Float) = impact.feed(ms, v)
 
     /** 시연 훅: 속도 pre→post 충돌 표본을 감지기에 넣고 차를 post 로 세운다(VC 는 순간 변화만 가능하지만 이 훅은 실차 표본 모양과 같다) */
     fun simImpact(pre: Float, post: Float) {
         val now = android.os.SystemClock.elapsedRealtime()
-        simUntil = now + 1500; fast.clear(); cand = null
+        simUntil = now + SIM_HOLD_MS; impact.reset()
         for (i in 0 until 5) feedFast(now - 700 + i * 100L, pre)
         feedFast(now - 200, post); feedFast(now - 100, post); feedFast(now, post)
         simulatedSpeed = post
@@ -172,11 +181,8 @@ class CarSignals(private val context: Context, private val main: Handler, privat
     }
 
     companion object {
-        const val IMPACT_A = 14.0         // m/s² — 제동으로는 못 내는 감속률(ETSI TR 103 460 표 3: 승용차 12 m/s² 초과는 불가능)
-        const val IMPACT_DV = 2.2f        // m/s — 8 km/h(EDR 기록 최소 Δv, 49 CFR 563)
-        const val IMPACT_DT_MIN = 0.08
-        const val IMPACT_DT_MAX = 0.5
-        const val IMPACT_HOLD_MS = 500L
+        const val SIM_HOLD_MS = 1500L       // impact_sim 표본을 넣는 동안 실제 표본 무시
+        const val SEAT_GATHER_MS = 800L     // 좌석·벨트 비동기 콜백을 모으는 시간
     }
 
     /** 탑승·하차를 판단하는 동안(픽업 확정~하차) 좌석·벨트·문을 매초 읽는다. 아니면 5초마다만(Pleos: 불필요한 폴링 최소화) */
@@ -197,12 +203,15 @@ class CarSignals(private val context: Context, private val main: Handler, privat
             }
             if (readCabin || n % 5 == 0) for (door in Region.REAR_DOORS)
                 v.getDoor().getCurrentDoorPosition(DoorArea(door), { d -> main.post { doorOpen[door] = d; if ((d ?: 0) > 0) rearDoorOpened = true } }, { })
+            if (turnListener != null) v.getTurnSignal().getCurrentTurnSignalState({ ts -> main.post { if (ts != null) setTurn(ts.name) } }, { })
             if (readRoadSignals) {
                 v.getSteeringWheel().getCurrentSteeringWheelAngle({ a -> main.post { steerAngle = (a as? Number)?.toFloat() } }, { })
                 v.getBrake().getCurrentBrakePedalStatus({ b -> main.post { brakePedal = b } }, { })
                 readRecirc(v)
                 if (n % 5 == 0) readEv(v)
                 if (n % 5 == 0) readOutsideTemp()
+                if (n % 3 == 1) for (w in SIDE_WINDOWS)
+                    v.getWindow().getCurrentWindowPosition(WindowArea(w), { p -> main.post { if (p != null) windowPos[w] = p else windowPos.remove(w) } }, { })
             }
         }
     }
@@ -238,7 +247,7 @@ class CarSignals(private val context: Context, private val main: Handler, privat
         }
     }
 
-    /** EV 충전 상태(충전구·충전 스위치·배터리 %) — 없는 차(내연·HEV)는 실패 콜백이 와서 값이 null 로 남는다 */
+    /** 외기 온도(ENV_OUTSIDE_TEMPERATURE, 동기 읽기). 못 읽으면 값은 그대로 두고, 한 번도 못 읽었고 readN < 10 일 때만 실패 로그 */
     private fun readOutsideTemp() {
         val m = cpm ?: return
         runCatching { m.getProperty<Float>(VehiclePropertyIds.ENV_OUTSIDE_TEMPERATURE, 0)?.value }
@@ -246,6 +255,7 @@ class CarSignals(private val context: Context, private val main: Handler, privat
             .onFailure { if (envTemp == null && readN < 10) log.d("외기 온도 읽기 실패: ${it.message}") }
     }
 
+    /** EV 충전 상태(충전구·충전 스위치·배터리 %) — 없는 차(내연·HEV)는 실패 콜백이 와서 값이 null 로 남는다 */
     private fun readEv(v: Vehicle) {
         runCatching {
             val ev = v.getEvBattery()
@@ -284,16 +294,20 @@ class CarSignals(private val context: Context, private val main: Handler, privat
         if (v != null) Region.ALL_SEATS.forEach { seat ->
             runCatching { v.getSeat().getCurrentSeatOccupancy(SeatArea(seat), { o -> main.post { if (o != null) result[seat] = o } }, { }) }
         }
-        main.postDelayed({ onDone(result.toMap()) }, 800)
+        main.postDelayed({ onDone(result.toMap()) }, SEAT_GATHER_MS)
     }
 
     fun rearDoorOpen(): Boolean = Region.REAR_DOORS.any { (doorOpen[it] ?: 0) > 0 }
     fun doorIsOpen(door: DoorValue): Boolean = (doorOpen[door] ?: 0) > 0
 
     fun release() {
+        setFastSpeed(false); setTurnSignalWatch(false)   // 도로 링크·연구 기록 중에 닫혀도 구독이 남지 않게
         @Suppress("DEPRECATION")   // registerCallback 짝 (API 34)
         runCatching { cpm?.unregisterCallback(speedCallback) }
         runCatching { car?.disconnect() }
         runCatching { vehicle?.release() }
     }
 }
+
+/** 비·침수·연기 안내 때 보는 창문(1·2열 옆 창문. 앞뒤 유리·지붕은 열리지 않는다) */
+private val SIDE_WINDOWS = listOf(WindowValue.ROW_1_LEFT, WindowValue.ROW_1_RIGHT, WindowValue.ROW_2_LEFT, WindowValue.ROW_2_RIGHT)

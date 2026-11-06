@@ -29,9 +29,11 @@ MAX_BODY = 64 * 1024        # 휴대폰이 보내는 본문은 위치·버튼 �
 SOCKET_TIMEOUT = 10         # 초: 느리게 보내는 연결이 스레드를 붙들지 못하게
 MAX_THREADS = 32            # 동시에 처리하는 요청 수 — 넘치면 바로 503
 MAX_QUERY_VALUE = 64        # 넘기는 쿼리 값 길이
+LATEST_TIMEOUT = 3          # 초: /j 가 앱에 가장 최근 세션을 묻는 시간
+UPSTREAM_TIMEOUT = 10       # 초: 앱 내장 서버로 넘긴 요청을 기다리는 시간
 
 # 넘기는 경로(휴대폰 페이지가 실제로 부르는 것만). (메서드, 경로 정규식, 넘길 쿼리 키)
-SID = r"[0-9a-f]{16}"       # 픽업 세션 id(64비트 16진수, MeeosEngine·meeos_server.py 와 같다)
+SID = r"[0-9a-f]{16}"       # 픽업 세션 id(16자리 16진수, MeeosEngine·meeos_server.py 와 같은 형식)
 GID = r"[0-9a-f]{6}"        # 가족 그룹 id(LinkHub rid(6))
 ROUTES = [
     # 페이지: 기다리는 사람 /m/<세션>, 보호자 보기 /f/<세션>, 도로·가족 링크 /link[/<그룹>]
@@ -67,7 +69,7 @@ def lan_ips():
 
 
 def latest():
-    with urllib.request.urlopen(APP + "/api/latest", timeout=3) as r:
+    with urllib.request.urlopen(APP + "/api/latest", timeout=LATEST_TIMEOUT) as r:
         return json.loads(r.read()).get("id")
 
 
@@ -133,7 +135,7 @@ class Relay(BaseHTTPRequestHandler):
         headers = {"Content-Type": "application/json"} if method == "POST" else {}
         req = urllib.request.Request(APP + target, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as r:
                 body, code, rh = r.read(), r.status, r.headers
         except urllib.error.HTTPError as e:
             # 앱의 오류 본문(예외 문구가 섞일 수 있다)은 넘기지 않고 일반 문구로 바꾼다

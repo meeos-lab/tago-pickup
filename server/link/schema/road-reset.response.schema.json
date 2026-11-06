@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-reset.response",
+  "title": "POST /api/road/reset 200 응답",
+  "type": "object",
+  "required": ["api", "ok"],
+  "properties": {
+    "api": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/api"},
+    "ok": {"const": true}
+  }
+}

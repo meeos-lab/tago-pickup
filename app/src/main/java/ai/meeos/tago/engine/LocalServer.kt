@@ -121,6 +121,11 @@ class LocalServer(private val engines: Map<String, MeeosEngine>, private val pag
         }
         if (method == "GET" && parts.firstOrNull() == "link" && linkPage != null) return send(200, linkPage, "text/html; charset=utf-8")
         if (method == "GET" && parts.firstOrNull() == "world" && worldPage != null) return send(200, worldPage, "text/html; charset=utf-8")
+        // 구급차 휴대폰(위치 신호): /ambulance?token=… → 에셋 link/ambulance.html (PC 서버와 같은 경로)
+        if (method == "GET" && parts.firstOrNull() == "ambulance" && link != null) {
+            val page = runCatching { assetReader?.invoke("link/ambulance.html") }.getOrNull()
+            return if (page != null) send(200, page, "text/html; charset=utf-8") else err(404, "not found")
+        }
         // 3D 관제 화면의 모델: /models/<이름>.glb → 에셋 link/models/<이름>.glb (이름은 소문자·숫자·하이픈만)
         if (method == "GET" && parts.firstOrNull() == "models") {
             val name = parts.getOrNull(1)

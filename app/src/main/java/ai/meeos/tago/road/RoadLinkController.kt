@@ -1,8 +1,10 @@
 package ai.meeos.tago.road
 
+import ai.meeos.tago.app.Edition
 import ai.meeos.tago.BuildConfig
 import ai.meeos.tago.R
 import ai.meeos.tago.SirenMic
+import ai.meeos.tago.SirenYamnet
 import ai.meeos.tago.app.Question
 import ai.meeos.tago.app.Services
 import ai.meeos.tago.engine.LinkHub
@@ -49,6 +51,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
     private var lastSayAt = 0L                              // 말 예산: 마지막으로 말한 시각
     private var prevSteer: Float? = null
     private var lastSwerveAt = 0L
+    private var lastYieldAt = 0L                            // 길 터 주기(YIELD) 마지막 보고 시각
     private var brakeHoldSince = 0L
     private var brakeHoldReported = false
     private var recircReported = false
@@ -57,7 +60,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
     private var demoCalled = false
 
     // 사이렌(긴급차량): 도로 링크 중 차 안 마이크로 듣는다. 듣는 동안 5초마다 보고. 음성 인식이 듣는 동안은 마이크를 놓아 준다
-    private val sirenMic = SirenMic({ on -> s.main.post { sirenHeard = on; if (on) s.log.d("감지: 사이렌 → 앞차들에게") } }, { s.log.d(it) })
+    private val sirenMic = SirenMic({ SirenYamnet.loadModel(context) }, { on -> s.main.post { sirenHeard = on; if (on) s.log.d("감지: 사이렌 → 앞차들에게") } }, { s.log.d(it) })
     private var sirenHeard = false
     private var sirenSentAt = 0L
     /** 시험용: 마이크 대신 흘려 넣을 wav(인텐트 siren_wav) */
@@ -71,11 +74,21 @@ class RoadLinkController(private val context: Context, private val s: Services, 
     private var simV = 25f
     /** 두 차 시연: 출발점을 LINK_START 에서 이만큼(m) 옮긴다(뒷차는 음수). 같은 허브에 붙는 두 에뮬레이터가 같은 자리에서 출발하지 않게 */
     var startOffset = 0.0
-    // 충전: 꽂은 때·그때 배터리 %, 고장 보고 여부, 정차 시작 시각(충전 대기 계산)
+    // 충전: 꽂은 때·그때 배터리 %·자리, 이번 꽂음의 질문·결과, 정차 시작 시각(충전 대기 계산)
     private var portSince = 0L
     private var portSoc: Int? = null
-    private var chargeFailReported = false
+    private var plugS = 0.0
+    private var plugAsked = false                            // 이번 꽂음에서 "충전기 고장인가요?"를 물었다
+    private var plugDone = false                             // 이번 꽂음에서 충전이 시작됐다(보고 끝)
     private var stopSince = 0L
+    // 충전 실패: 안 된 자리·시각, 허브에 CHARGE_FAIL 을 보냈는지('아니오'면 안 보냄), 질문 중인지
+    private var failSpot: Double? = null
+    private var failAt = 0L
+    private var failSent = false
+    private var chargeAsking = false
+    /** 충전기 고장 신고 1분 설문(열려 있으면 화면이 설문으로 바뀐다). 정차 중에만 */
+    var survey: ChargeSurvey? = null
+        private set
     // 사고 판단(docs/incident-judgment-design.md 10판): 충돌은 CarSignals 의 10 Hz 감지기가 알리고, 여기서 즉시 보고·운전자 확인·2차 사고 예방 모드
     private var impactAt = 0L                                // 마지막 충돌 감지 시각(에어백 30초 읽기 창)
     private var airbagReported = false
@@ -90,6 +103,25 @@ class RoadLinkController(private val context: Context, private val s: Services, 
     /** 두 차 시연: 이 차의 운전자 이름(기본은 지역 문자열 driver_name — 두 에뮬레이터가 같은 이름이면 그룹에서 구분이 안 된다) */
     var nameOverride: String? = null
     private val myName get() = nameOverride ?: t[R.string.driver_name]
+    /** 연구 기록(경고 반응 로그): 경고 문장을 말하는 순간만 알린다 — 말할지·언제 말할지는 바꾸지 않는다 */
+    var study: ai.meeos.tago.study.ResponseLog? = null
+    // 접근 경고음(주의 환기): 확인된 사고 지점·정체 꼬리에 덜 줄인 채 다가가면 꼬리까지 남은 시간(TTC)에 따라 삐 → 삐삐 → 삐삐삐(줄일 때까지 1초마다)
+    private val beep = ApproachBeep()
+    private var beepKey = ""
+    private var beepStage = 0
+    private var beepAt = 0L
+    /** 이 꼬리에서 낼 첫 단계의 바닥: 앞 꼬리에서 2단계 이상까지 올랐는데 덜 줄인 채 다음 꼬리로 넘어가면 2(1단계로 되돌아가지 않게) */
+    private var beepFloor = 0
+    private var looping = false
+    private fun loopOff() { if (looping) { looping = false; beep.loop3(false) } }
+    // 지난 알림음: 확인된 사고 의심 id → 지난 틱의 앞 거리(양수 → 0 이하로 바뀌면 지남), 정체 구간 안내 중이었는지
+    private val aheadLast = HashMap<String, Double>()
+    private var jamAhead = false
+    private var passAt = 0L
+    /** 허브가 마지막으로 알린 내 시계 오차(초, 없으면 null) — 로그용 */
+    private var clockSkew: Double? = null
+    /** 시연 훅 sim_kmh: 시연 주행이 권장 속도를 따르지 않고 이 속도(km/h)로 달린다 — 덜 줄인 운전자(접근 경고음 시험). null = 권장 속도 따름 */
+    var simTargetKmh: Float? = null
 
     private val t get() = s.texts
     private val car get() = s.car
@@ -98,8 +130,8 @@ class RoadLinkController(private val context: Context, private val s: Services, 
 
     /** 도로 링크 켜기. 시연(내장 서버)은 도로를 비우고 시작하고, 출발하면 시연 도로(모르는 Tago 차 14대)를 부른다 */
     fun start(pickupActive: Boolean) {
-        if (!BuildConfig.ROAD_LINK || active || pickupActive) return
-        val body = JSONObject().put("t", s.epoch()).put("lang", s.lang).put("name", myName).put("car", t[R.string.driver_car])
+        if (!Edition.roadLink || active || pickupActive) return
+        val body = JSONObject().put("t", s.epoch()).put("lang", s.lang).put("units", s.units).put("name", myName).put("car", t[R.string.driver_car])
         s.io.execute {
             runCatching {
                 if (BuildConfig.EMBEDDED_SERVER) s.api.http("POST", "/api/road/reset", "{}")
@@ -110,6 +142,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
                 advSaid = false; jamWatch = false; rainSaid.clear(); zoneSaid.clear(); simV = 25f
                 driveRisk.reset(); riskSaidAt = 0L; fatigueSaidAt = 0L; lastSayAt = System.currentTimeMillis()
                 car.readRoadSignals = true
+                car.setTurnSignalWatch(true)                 // 길 터 주기(YIELD): 오른쪽 깜빡이
                 car.onImpact = { pre, nowV, samples -> onImpact(pre, nowV, samples) }
                 car.setFastSpeed(true)
                 impactAt = 0L; airbagReported = false; crashAsked = false; commSim = false
@@ -190,20 +223,84 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         s.dialog.cancel()
         sirenMic.stop(); sirenHeard = false; sirenFile = false
         car.readRoadSignals = false
+        if (study?.active != true) car.setTurnSignalWatch(false)   // 연구 기록 중이면 그쪽이 계속 쓴다
         car.setFastSpeed(false); car.onImpact = null
         s.navi.onTrafficEvents = null
         if (simDrive) simDrive = false
+        beepKey = ""; beepStage = 0; aheadLast.clear(); jamAhead = false; loopOff()
+        survey = null; chargeAsking = false; clearFail(); portSince = 0L
         s.say(t[R.string.say_road_ended])
         onMapUrl(null)
         s.render()
     }
 
-    fun stop() { sirenMic.stop() }
+    fun stop() { sirenMic.stop(); beep.release() }
+
+    // ---- 충전기 고장: 질문 · 1분 설문 · 말 신고
+
+    private fun askCharge(now: Long) {
+        chargeAsking = true; failSpot = plugS; failAt = now; failSent = false
+        s.log.d("감지: 꽂은 뒤 ${CHARGE_FAIL_SEC}초 충전 없음 → 운전자에게 묻기")
+        s.dialog.ask(Question(Question.Kind.CHARGER, t[R.string.btn_charger_broken], t[R.string.btn_charger_fine], t[R.string.listen_charger], onAnswer = { answerCharge(it) }),
+            t[R.string.say_charger_ask])
+        s.main.postDelayed({ if (chargeAsking && s.dialog.pending?.kind == Question.Kind.CHARGER) { s.dialog.cancel(); answerCharge(null) } }, CHARGE_ASK_MS)
+    }
+
+    /** true = 고장이에요(CHARGE_FAIL + 설문), false = 아니에요(보고 안 함), null = 무응답·답 전에 뽑음(CHARGE_FAIL 만) */
+    private fun answerCharge(yes: Boolean?) {
+        if (!chargeAsking) return
+        chargeAsking = false
+        if (yes == false) { s.log.d("운전자: 충전기 고장 아님 — 보고 안 함"); return }
+        failSent = true
+        event("CHARGE_FAIL", "${CHARGE_FAIL_SEC}s")
+        s.log.d("충전기 고장 의심 → 뒤차들에게 (${if (yes == null) "무응답" else "운전자 확인"})")
+        if (yes == true) openSurvey(true)
+    }
+
+    private fun clearFail() { failSpot = null; failSent = false }
+
+    /** 충전소(휴게소 services) 반경 안: 허브 보기의 restHere(차 위치 500 m 안 휴게소 = CHARGER_NEAR). 신고 버튼·설문·음성 신고·90초 질문은 여기서만 */
+    val nearCharger: Boolean get() = view?.let { !it.isNull("restHere") } == true
+
+    /** 1분 설문 열기: 질문에 '고장이에요'로 답했거나 [충전기 고장 신고]를 눌렀다. 주행 중이거나 충전소 반경 밖이면 열지 않는다 */
+    fun openSurvey(fromQuestion: Boolean = false) {
+        if (!active || car.driving || survey != null || !nearCharger) return   // 이미 열려 있으면 고른 답을 지우지 않는다
+        survey = ChargeSurvey(failSpot ?: linkS)
+        s.say(t[if (fromQuestion) R.string.say_survey_open_after else R.string.say_survey_open])
+        s.render()
+    }
+    /** 그림 타일 하나 = 지금 문항의 답. 마지막 문항이면 바로 보낸다 */
+    fun surveyPick(id: String) { val sv = survey ?: return; sv.pick(id); if (sv.done) surveySend() else s.render() }
+    fun surveySkip() { val sv = survey ?: return; sv.skip(); if (sv.done) surveySend() else s.render() }
+    fun surveyBack() { survey?.back(); s.render() }
+    fun surveyClose() { survey = null; s.render() }
+    private fun surveySend() {
+        val sv = survey ?: return
+        survey = null
+        event("CHARGE_REPORT", "survey", sv.body())
+        s.log.d("충전기 고장 신고(설문) → 뒤차들에게 ${sv.answers.filterValues { it.isNotEmpty() }}")
+        s.say(t[R.string.say_survey_sent])
+        s.render()
+    }
+
+    /** 운전자 말 "충전기 고장": 충전소 반경 안에 서 있으면 설문을 연다. 주행 중이거나 반경 밖이면 안내만 한다(신고하지 않는다) */
+    fun chargeVoiceReport() {
+        if (!active) return
+        if (car.driving || !nearCharger) { s.log.d("충전기 고장 신고(말) — 충전소 반경 밖·주행 중이라 받지 않음"); s.say(t[R.string.say_charger_far]); return }
+        openSurvey()
+    }
+
+    /** 시연 훅 ev_sim move=N: 정차한 채 자리를 N m 옮긴다(에뮬레이터는 휴게소 안 이동을 흉내 낼 방법이 없다) */
+    fun demoMove(m: Double) { linkS += m; s.log.d("시연: 자리 ${m}m 이동 → s ${"%.1f".format(linkS)}") }
+
+    /** 시연 훅: 경고음 단계(1·2·3, ApproachBeep.PASSED)를 바로 울린다 / 네 소리를 WAV 로 쓴다 */
+    fun beepTest(stage: Int) { if (stage == ApproachBeep.LOOP3) { beep.loop3(true); s.main.postDelayed({ beep.loop3(false) }, 4000) } else beep.play(stage) }
+    fun beepWavs(dir: File) { s.io.execute { val fs = beep.writeWavs(dir); s.main.post { s.log.d("경고음 WAV: " + fs.joinToString { it.name }) } } }
 
     // ------------------------------------------------------------ 1초마다
 
     private fun state() = JSONObject().put("t", s.epoch()).put("s", linkS).put("speed", car.speedMs.toDouble()).put("wiper", car.wiper)
-        .also { b -> car.outsideTemp?.let { b.put("temp", it.toDouble()) } }
+        .also { b -> car.outsideTemp?.let { b.put("temp", it.toDouble()) }; s.navi.speedLimitKmh?.let { b.put("limit", it) } }   // limit: 순정 내비 제한속도(km/h), 모르면 안 보냄
 
     /** 도로 링크 요청(state·event·demo) — 응답은 내 차 기준 보기 */
     private fun post(path: String, body: JSONObject) {
@@ -305,6 +402,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
     private fun simFollow(): Float {
         val adv = view?.optJSONObject("ahead")?.optJSONObject("advice")
         val target = when {
+            simTargetKmh != null -> simTargetKmh!! / 3.6f
             adv == null -> 25f
             adv.optInt("dist") > 0 -> adv.optInt("adviseKmh") / 3.6f
             else -> maxOf(adv.optInt("jamKmh"), 14) / 3.6f
@@ -313,6 +411,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         return simV
     }
 
+    /** 1초 틱: 진행 거리 → 감지기들(순서가 의미 있다: 급제동·길 비킴은 직전 두 속도를 본 뒤 갱신) → 충전 → 에어백·사이렌 → 접근 경고음 → 허브 보고 */
     private fun roadTick(dt: Double) {
         val driving = simDrive || car.driving
         if (simDrive) car.simulatedSpeed = simFollow()
@@ -320,84 +419,229 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         if (driving) linkS += speed * dt * LinkHub.DEMO_SCALE
         if (!demoCalled && driving && speed > 3f) { demoCalled = true; post("/api/road/demo", JSONObject().put("t", s.epoch())) }
         val now = System.currentTimeMillis()
-        // 급제동: 1초 사이 3 m/s 이상 감속(18 km/h 이상에서) + 다음 1초에도 낮게 유지(순간 출렁임 제외), 10초에 한 번
-        if (prevSpeed2 >= 5f && prevSpeed2 - prevSpeed >= 3f && speed <= prevSpeed + 1f && now - lastBrakeAt > 10_000) {
+        detectHardBrake(now, speed)
+        detectYield(now, speed)
+        prevSpeed2 = prevSpeed; prevSpeed = speed
+        driveRisk.tick(now, speed, car.steerAngle)
+        if (jamWatch) jamMinKmh = minOf(jamMinKmh, speed * 3.6)
+        detectRain()
+        detectSwerve(now, speed)
+        detectBrakeHold(now, speed)
+        detectRecirc()
+        detectTurnback(now)
+        chargeTick(now)
+        airbagTick(now)
+        sirenTick(now)
+        approachTick(now, speed)
+        if (!commSim) post("/api/road/state", state())   // 말하는 중에도 보고한다(안내는 한 번씩 큐에 쌓여 겹치지 않는다). comm_sim 이면 '통신 끊김' 흉내
+    }
+
+    /** 급제동: 1초 사이 3 m/s 이상 감속(18 km/h 이상에서) + 다음 1초에도 낮게 유지(순간 출렁임 제외), 10초에 한 번 */
+    private fun detectHardBrake(now: Long, speed: Float) {
+        if (isHardBrake(prevSpeed2, prevSpeed, speed) && now - lastBrakeAt > HARD_BRAKE_GAP_MS) {
             lastBrakeAt = now
             if (jamWatch) jamBrakes++
             driveRisk.brake(now)
             event("HARD_BRAKE", "%.1f→%.1f m/s".format(prevSpeed2, prevSpeed))
             s.log.d("감지: 급제동 → 뒤차들에게 (%.1f→%.1f→%.1f m/s)".format(prevSpeed2, prevSpeed, speed))
         }
-        prevSpeed2 = prevSpeed; prevSpeed = speed
-        driveRisk.tick(now, speed, car.steerAngle)
-        if (jamWatch) jamMinKmh = minOf(jamMinKmh, speed * 3.6)
-        // 폭우: 와이퍼 연속 작동(워셔·간헐 제외)
+    }
+
+    /**
+     * 길 터 주기(YIELD, docs/dev/40-algorithms.md A-13b): 시속 30 이상에서 2초 사이 3 m/s 넘게 줄이며 오른쪽으로 비킴(오른쪽 깜빡이,
+     * 또는 핸들 오른쪽 10° 이상 — 부호는 Android VHAL PERF_STEERING_ANGLE 규약 '왼쪽 음수'를 따름, Pleos 실차 미확인). 60초에 한 번.
+     * 허브는 여러 차의 YIELD 지점이 교통 흐름보다 빨리 앞으로 옮겨 갈 때만 뒤에 긴급차량이 있다고 본다(한 대의 비킴은 아무것도 아니다)
+     */
+    private fun detectYield(now: Long, speed: Float) {
+        val steer = car.steerAngle; val right = car.turnSignal == "RIGHT"
+        if (isYield(prevSpeed2, speed, right, steer) && now - lastYieldAt > YIELD_GAP_MS) {
+            lastYieldAt = now
+            event("YIELD", if (right) "turn" else "steer")
+            s.log.d("감지: 길 터 주기(%.1f→%.1f m/s, %s) → 허브".format(prevSpeed2, speed, if (right) "오른쪽 깜빡이" else "핸들 %.0f°".format(steer)))
+        }
+    }
+
+    /** 폭우: 와이퍼 연속 작동(워셔·간헐 제외) — 바뀔 때만 보고 */
+    private fun detectRain() {
         val rain = car.wiper.startsWith("CONTINUOUS")
         if (rain != rainReported) {
             rainReported = rain
             event(if (rain) "HEAVY_RAIN" else "HEAVY_RAIN_CLEARED", car.wiper)
         }
-        // 급조향(낙하물 회피): 40km/h 이상에서 1초 사이 핸들 60° 이상, 브레이크는 밟지 않음. 15초에 한 번
+    }
+
+    /** 급조향(낙하물 회피): 40km/h 이상에서 1초 사이 핸들 60° 이상, 브레이크는 밟지 않음. 15초에 한 번 */
+    private fun detectSwerve(now: Long, speed: Float) {
         val a = car.steerAngle; val pa = prevSteer
-        if (a != null && pa != null && speed > 11f && abs(a - pa) >= 60f && car.brakePedal != true && now - lastSwerveAt > 15_000) {
+        if (isSwerve(pa, a, speed, car.brakePedal) && now - lastSwerveAt > SWERVE_GAP_MS) {
             lastSwerveAt = now
             event("SWERVE", "%.0f→%.0f°".format(pa, a))
             s.log.d("감지: 급조향 → 뒤차들에게 (%.0f→%.0f°)".format(pa, a))
         }
         prevSteer = a
-        // 브레이크 오래 밟음(긴 내리막): 30km/h 이상에서 20초 넘게 계속. 떼면 다시 셈
-        if (car.brakePedal == true && speed > 8f) {
+    }
+
+    /** 브레이크 오래 밟음(긴 내리막): 30km/h 이상에서 20초 넘게 계속. 떼면 다시 셈 */
+    private fun detectBrakeHold(now: Long, speed: Float) {
+        if (car.brakePedal == true && speed > BRAKE_HOLD_FROM_MS) {
             if (brakeHoldSince == 0L) brakeHoldSince = now
-            if (!brakeHoldReported && now - brakeHoldSince >= 20_000) {
+            if (!brakeHoldReported && now - brakeHoldSince >= BRAKE_HOLD_MS) {
                 brakeHoldReported = true
                 event("BRAKE_HOLD", "20s")
                 s.log.d("감지: 브레이크 20초 이상 → 긴 내리막")
             }
         } else { brakeHoldSince = 0L; brakeHoldReported = false }
-        // 내기순환으로 바꿈(연기·매연): 켜질 때 보고, 꺼지면 해제 보고(서버는 10분 동안 보고를 남긴다)
+    }
+
+    /** 내기순환으로 바꿈(연기·매연): 켜질 때 보고, 꺼지면 해제 보고(서버는 10분 동안 보고를 남긴다) */
+    private fun detectRecirc() {
         val rc = car.recirc == true
         if (rc != recircReported) {
             recircReported = rc
             event(if (rc) "RECIRC_ON" else "RECIRC_OFF", "recirc")
             if (rc) s.log.d("감지: 내기순환 → 뒤차들에게")
         }
-        // 되돌아감(침수·통제 의심): 도로 위에서 후진 기어 3초 이상
+    }
+
+    /** 되돌아감(침수·통제 의심): 도로 위에서 후진 기어 3초 이상 */
+    private fun detectTurnback(now: Long) {
         if (car.reversing && linkS > 0) {
             if (reverseSince == 0L) reverseSince = now
-            if (!turnbackReported && now - reverseSince >= 3_000) {
+            if (!turnbackReported && now - reverseSince >= TURNBACK_MS) {
                 turnbackReported = true
                 event("TURNBACK", "reverse")
                 s.log.d("감지: 되돌아감 → 뒤차들에게")
             }
         } else reverseSince = 0L
-        // 사이렌(긴급차량): 마이크가 듣는 동안 5초마다. 서버가 차마다 처음 들은 곳을 이어 긴급차량이 다가오는 방향·속도를 잰다
-        // 충전(EV): 정차 중 충전구를 열고(꽂고) 90초 넘게 충전이 시작되지 않으면 충전기 고장·결제 오류 의심 → CHARGE_FAIL, 충전이 시작되면 CHARGE_OK(해제).
-        // 정차한 지 3분 넘어서야 꽂으면 충전 대기 → CHARGE_START(대기 분). 허브는 휴게소 500m 안일 때만 받아 그 휴게소에 붙인다
+    }
+
+    /**
+     * 충전(EV, docs/dev/40-algorithms.md A-15): 정차 중 꽂고 90초 넘게 충전이 시작되지 않으면 바로 올리지 않고 묻는다 "충전기 고장인가요?"
+     *  [고장이에요]·'고장' → CHARGE_FAIL + 1분 설문, [아니에요] → 보고 안 함(결제·꽂음 실수), 60초 무응답·답 전에 뽑음 → CHARGE_FAIL(차 신호만, 전과 같다).
+     *  실패 뒤 같은 휴게소에서 5 m 넘게 옮겨 충전되면 CHARGE_MOVED(그 기기 고장의 강한 근거 — 해제하지 않는다), 같은 자리에서 되면 CHARGE_OK(해제).
+     *  실패 없이 충전되면 CHARGE_SUCCESS(허브: 같은 자리 남의 고장 기록은 거두고, 다른 자리면 '다른 기기는 된다'의 근거).
+     *  정차한 지 3분 넘어서야 꽂으면 충전 대기 → CHARGE_START(대기 분). 허브는 휴게소 500m 안일 때만 받아 그 휴게소에 붙인다
+     */
+    private fun chargeTick(now: Long) {
         if (car.stopped) { if (stopSince == 0L) stopSince = now } else stopSince = 0L
+        failSpot?.let { if (now - failAt > CHARGE_KEEP_MS || abs(linkS - it) > CHARGE_REST_M) clearFail() }   // 30분 지났거나 휴게소를 떠났다
+        if (survey != null && car.driving) { survey = null; s.log.d("주행 시작 — 충전기 신고 설문 닫음") }
         val port = car.chargePort
         if (port == true && car.stopped) {
             val soc = car.soc
             if (portSince == 0L) {
-                portSince = now; portSoc = soc; chargeFailReported = false
-                val waited = if (stopSince > 0) (now - stopSince) / 1000 else 0L
-                if (waited >= CHARGE_WAIT_SEC) { event("CHARGE_START", "${waited / 60}"); s.log.d("감지: 충전 대기 ${waited / 60}분 → 일행에게") }
+                portSince = now; portSoc = soc; plugS = linkS; plugAsked = false; plugDone = false
+                val waited = if (stopSince > 0) (now - stopSince) / 1000 else 0L   // 실패 뒤 다시 꽂음(failSpot)은 대기 줄이 아니라 고장 탓 — 대기로 보내지 않는다
+                if (waited >= CHARGE_WAIT_SEC && failSpot == null) { event("CHARGE_START", "${waited / 60}"); s.log.d("감지: 충전 대기 ${waited / 60}분 → 일행에게") }
             }
             val progressing = car.charging == true || (soc != null && portSoc != null && soc > portSoc!!)
-            if (progressing && chargeFailReported) { chargeFailReported = false; event("CHARGE_OK", "charging"); s.log.d("충전 시작 — 충전기 고장 의심 해제") }
-            else if (!progressing && !chargeFailReported && now - portSince >= CHARGE_FAIL_SEC * 1000L) {
-                chargeFailReported = true
-                event("CHARGE_FAIL", "${CHARGE_FAIL_SEC}s"); s.log.d("감지: 충전기 고장 의심(꽂은 뒤 ${CHARGE_FAIL_SEC}초 충전 없음) → 뒤차들에게")
+            if (progressing && !plugDone) {
+                plugDone = true
+                if (chargeAsking) { s.dialog.cancel(); chargeAsking = false }   // 묻는 사이 충전이 시작됐다 = 고장 아님
+                val fs = failSpot
+                if (fs != null && failSent) {
+                    val d = abs(linkS - fs)
+                    if (d >= CHARGE_MOVE_M) { event("CHARGE_MOVED", "${d.toInt()}", JSONObject().put("from", fs)); s.log.d("충전 시작: ${d.toInt()}m 옮긴 자리 — 앞 자리 충전기 고장 근거(해제 안 함)") }
+                    else { event("CHARGE_OK", "charging"); s.log.d("충전 시작: 같은 자리 — 충전기 고장 의심 해제") }
+                } else { event("CHARGE_SUCCESS", "charging"); s.log.d("충전 시작 → 허브(같은 자리 고장 기록 정리)") }
+                clearFail()
+            } else if (!progressing && !plugDone && !plugAsked && now - portSince >= CHARGE_FAIL_SEC * 1000L) {
+                plugAsked = true
+                if (nearCharger) askCharge(now) else s.log.d("꽂은 뒤 ${CHARGE_FAIL_SEC}초 충전 없음 — 충전소 반경 밖이라 묻지 않음")
             }
-        } else if (port != true) { portSince = 0L; chargeFailReported = false }
-        // 충돌 뒤 30초 동안 에어백 전개를 읽는다(평소엔 읽지 않는다). 에뮬레이터는 미지원이라 훅 airbag_sim 으로만
-        if (impactAt > 0 && !airbagReported && now - impactAt < 30_000) car.readAirbag { b ->
+        } else if (port != true) {
+            portSince = 0L
+            if (chargeAsking) { s.dialog.cancel(); answerCharge(null) }   // 답하기 전에 뽑았다 → 차 신호만 보고
+        }
+    }
+
+    /** 충돌 뒤 30초 동안 에어백 전개를 읽는다(평소엔 읽지 않는다). 에뮬레이터는 미지원이라 훅 airbag_sim 으로만 */
+    private fun airbagTick(now: Long) {
+        if (impactAt > 0 && !airbagReported && now - impactAt < AIRBAG_WATCH_MS) car.readAirbag { b ->
             if (b == true && !airbagReported) { airbagReported = true; event("AIRBAG", "deployed"); s.log.d("감지: 에어백 전개 → 뒤차들에게") }
         }
-        if (sirenHeard && now - sirenSentAt >= 5_000) {
+    }
+
+    /** 사이렌(긴급차량): 마이크가 듣는 동안 5초마다. 서버가 차마다 처음 들은 곳을 이어 긴급차량이 다가오는 방향·속도를 잰다 */
+    private fun sirenTick(now: Long) {
+        if (sirenHeard && now - sirenSentAt >= SIREN_REPORT_MS) {
             sirenSentAt = now
             event("SIREN", "mic")
         }
-        if (!commSim) post("/api/road/state", state())   // 말하는 중에도 보고한다(안내는 한 번씩 큐에 쌓여 겹치지 않는다). comm_sim 이면 '통신 끊김' 흉내
+    }
+
+    /**
+     * 접근 경고음. 꼬리 = 앞의 확인된 사고 의심(정지, 0 km/h) 또는 권장 속도 안내의 정체 시작(정체 속도) 중 가까운 것.
+     * 내 차가 꼬리보다 BEEP_SLOW_KMH 넘게 빠를 때만, 꼬리까지 남은 시간 TTC = 거리 ÷ (속도 차 × DEMO_SCALE) 로 단계를 정한다.
+     * 단계는 꼬리마다 한 번씩 올라가고(같은 단계를 되풀이하지 않는다), 3단계만 1초마다 되풀이한다. 충분히 줄이면 멈춘다
+     */
+    private fun approachTick(now: Long, speed: Float) {
+        val v = view ?: return
+        passTick(v, now, speed)
+        var key: String? = null; var dist = 0.0; var tailKmh = 0.0
+        v.optJSONArray("hazards")?.let { a ->
+            for (i in 0 until a.length()) {
+                val h = a.getJSONObject(i)
+                if (h.optString("type") != "INCIDENT" || !h.optBoolean("confirmed") || h.isNull("ahead")) continue
+                val d = h.optDouble("ahead")
+                if (d > 0 && (key == null || d < dist)) { key = h.optString("id"); dist = d; tailKmh = 0.0 }
+            }
+        }
+        v.optJSONObject("ahead")?.optJSONObject("advice")?.let { adv ->
+            val d = adv.optDouble("dist")
+            if (d > 0 && (key == null || d < dist)) { key = "jam"; dist = d; tailKmh = adv.optDouble("jamKmh") }
+        }
+        val k = key
+        if (k == null) { beepKey = ""; beepStage = 0; loopOff(); return }
+        if (k != beepKey) {
+            loopOff()
+            beepFloor = if (beepStage >= 2 && now - beepAt < BEEP_CARRY_MS) 2 else 0
+            beepKey = k; beepStage = 0
+        }
+        val closingKmh = speed * 3.6 - tailKmh
+        if (closingKmh < BEEP_SLOW_KMH) { loopOff(); return }                 // 충분히 줄였다: 3단계 반복을 멈춘다
+        val ttc = dist / (closingKmh / 3.6 * LinkHub.DEMO_SCALE)
+        val raw = when { ttc <= BEEP_TTC[2] -> 3; ttc <= BEEP_TTC[1] -> 2; ttc <= BEEP_TTC[0] -> 1; else -> 0 }
+        val stage = if (raw > 0) maxOf(raw, beepFloor) else 0
+        if (stage < 3) loopOff()
+        if (stage == 0 || !(stage > beepStage || (stage == 3 && now - beepAt >= 1000))) return
+        if (stage < 3 && s.voice.speaking) return          // 안내 음성이 나오는 중: 1·2단계는 끝난 뒤 다음 틱에(겹치면 둘 다 흐려진다). 3단계는 그대로
+        beepStage = maxOf(beepStage, stage); beepAt = now
+        if (stage == 3) { if (!looping) { looping = true; beep.loop3(true) } }   // 3단계는 1초 고리로 끊김 없이(기록은 1초마다 그대로)
+        else beep.play(stage)
+        study?.beep(stage, ttc, dist, k)
+        s.log.d("주의음 ${stage}단계: 꼬리 ${dist.toInt()}m, ${"%.1f".format(ttc)}초, 속도 차 ${closingKmh.toInt()}km/h")
+    }
+
+    /**
+     * 지난 알림음. ① 확인된 사고 의심의 앞 거리가 양수에서 0 이하로 바뀌면(그 지점을 지남) ② 권장 속도 안내(정체 꼬리·정체 안)가 이어지다
+     * 사라지고 시속 40 이상으로 달리면(정체 구간을 빠져나옴) "딩–동" 한 번. 3초 안에 겹치면 한 번만
+     */
+    private fun passTick(v: JSONObject, now: Long, speed: Float) {
+        val seen = HashSet<String>()
+        var passed: String? = null
+        v.optJSONArray("hazards")?.let { a ->
+            for (i in 0 until a.length()) {
+                val h = a.getJSONObject(i)
+                if (h.optString("type") != "INCIDENT" || h.isNull("ahead")) continue
+                val id = h.optString("id"); val d = h.optDouble("ahead")
+                seen += id
+                val prev = aheadLast[id]
+                if (prev != null && prev > 0 && d <= 0) passed = id
+                if (h.optBoolean("confirmed")) aheadLast[id] = d else aheadLast.remove(id)
+            }
+        }
+        aheadLast.keys.retainAll(seen)
+        val adv = v.optJSONObject("ahead")?.optJSONObject("advice")
+        if (adv != null) jamAhead = true
+        else if (jamAhead && speed * 3.6 >= 40) { jamAhead = false; if (passed == null) passed = "jam" }
+        val p = passed ?: return
+        if (now - passAt < 3000) return
+        passAt = now
+        loopOff()
+        beep.passed()
+        study?.passed(p)
+        s.log.d("지난 알림음: ${if (p == "jam") "정체 구간 벗어남" else "사고 지점 $p 지남"}")
     }
 
     /** 사이렌 감지는 도로 링크 중에만, 음성 인식이 듣지 않을 때만 마이크를 쓴다(1초마다 맞춘다) */
@@ -418,6 +662,9 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         view = v
         s.render()
         val now = System.currentTimeMillis()
+        // 시계 오차(ADR-43): 허브가 내 t 를 수신 시각 기준으로 CLOCK_SKEW_SEC 넘게 어긋났다고 보면 clockSkew(초)를 준다 — 동작은 허브가 맞추고 앱은 기록만
+        val skew = v.optDouble("clockSkew").takeIf { !it.isNaN() }
+        if (skew != clockSkew) { clockSkew = skew; s.log.d(if (skew == null) "시계 오차 해소" else "시계 오차 ${skew}s — 허브가 수신 시각으로 창을 잡음(차 시계 확인)") }
         if (!briefed && v.optBoolean("demo") && v.optInt("nearby") > 0) { briefed = true; speak(v.optString("brief"), now); return }
         // 말 줄이기(설계 10-11): ① 바로 말함 = 긴급차량·사고 의심·가까운 급제동(예산과 상관없이)
         // ② 조용할 때만 = 나머지 위험(종류별 행동 거리 안)·권장 속도·비 예보·교량 결빙·위험성 — 도로 시간 30초에 한 문장
@@ -430,7 +677,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
             val type = h.optString("type"); val lvl = h.optInt("level", 1); val id = h.getString("id")
             if ((spoken[id] ?: 0) >= lvl) continue
             if (type != "SIREN" && h.optDouble("ahead", 0.0) > (SAY_RANGE[type] ?: SAY_RANGE_DEFAULT)) continue   // 아직 멀다: 화면에만(가까워지면 그때 말한다)
-            if (type in URGENT) { spoken[id] = lvl; speak(h.getString("say"), now); return }
+            if (type in URGENT) { spoken[id] = lvl; study?.onSpoken(h, null, h.getString("say")); speak(h.getString("say"), now); return }
             if (normal == null) normal = h
         }
         if (now - lastSayAt < roadMs(BUDGET_MS)) return                 // 말 예산: 방금 말했다 — 다음 틱에 다시 본다(거리 문장은 그때 새로 온다)
@@ -440,7 +687,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         if (bridge != null && (normal == null || bridge.optDouble("ahead") <= normal.optDouble("ahead"))) {
             zoneSaid += bridge.getString("id"); speak(bridge.getString("say"), now); return
         }
-        normal?.let { spoken[it.getString("id")] = it.optInt("level", 1); speak(it.getString("say"), now); return }
+        normal?.let { val say = it.getString("say") + windowNote(it); spoken[it.getString("id")] = it.optInt("level", 1); study?.onSpoken(it, null, say); speak(say, now); return }
         val ahead = v.optJSONObject("ahead")
         val adv = ahead?.optJSONObject("advice")
         if (adv == null) {
@@ -452,11 +699,12 @@ class RoadLinkController(private val context: Context, private val s: Services, 
             if (car.speedMs > 15f) { jamWatch = false; advSaid = false }
         } else if (adv.has("say") && !advSaid) {
             advSaid = true; jamWatch = true; jamBrakes = 0; jamMinKmh = 999.0
+            study?.onSpoken(null, adv, adv.getString("say"))
             speak(adv.getString("say"), now); return
         }
         val rain = ahead?.optJSONObject("rain")
         if (rain != null && rain.has("say") && rainSaid.add(rain.optString("id"))) {
-            speak(rain.getString("say"), now); return      // 창문 상태는 Vehicle 창문 신호로 확장(에뮬레이터 창문 닫힘)
+            speak(rain.getString("say") + windowNote(null), now); return
         }
         val r = v.optJSONObject("group")?.optJSONObject("rest")
         if (r != null && !r.optBoolean("none")) {
@@ -470,8 +718,19 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         riskLine(v.optJSONObject("risk"), now)?.let { speak(it, now); return }
     }
 
-    /** 말하고 예산 시계를 맞춘다 */
-    private fun speak(text: String, now: Long) { s.say(text); lastSayAt = now }
+    /** 말하고 예산 시계를 맞춘다. 경고음·지난 알림음을 낸 지 SPEAK_AFTER_BEEP_MS 가 안 됐으면 그만큼 미뤄 말한다(알림음 → 안내 문장, 순정 내비 순서) */
+    /** 비·침수·연기 안내 뒤에 붙이는 말: 1·2열 창문 중 하나라도 열려 있으면 "창문이 열려 있습니다. 창문을 닫아 주세요." (h = null 이면 비 예보).
+     *  앱이 창문을 닫지는 않는다(CarSignals.windowPos 참고) */
+    private fun windowNote(h: JSONObject?): String {
+        val env = h == null || h.optString("type") in WINDOW_TYPES || h.optBoolean("flood")
+        return if (env && car.openWindows.isNotEmpty()) " " + t[R.string.say_close_windows] else ""
+    }
+
+    private fun speak(text: String, now: Long) {
+        val wait = maxOf(beepAt, passAt) + SPEAK_AFTER_BEEP_MS - System.currentTimeMillis()
+        if (wait > 0) s.main.postDelayed({ s.say(text) }, wait) else s.say(text)
+        lastSayAt = now
+    }
 
     /** 도로 시간(ms) → 실제 시간. 시연 경로는 거리를 DEMO_SCALE 배로 압축해 달리므로 간격도 같은 배로 줄인다 */
     private fun roadMs(ms: Long) = (ms / LinkHub.DEMO_SCALE).toLong()
@@ -511,7 +770,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         val lang = if (en) "en" else "ko"
         return when (r.optString("tag")) {
             "AHEAD" -> {
-                val d = LinkHub.kmText(lang, r.optDouble("ahead", 0.0))
+                val d = LinkHub.distText(lang, r.optDouble("ahead", 0.0), s.units)   // 영어 거리 글은 지역 단위(ADR-45)
                 if (r.optString("kind") == "incident") (if (en) "possible crash $d ahead" else "전방 $d 사고 의심") else (if (en) "slow traffic $d ahead" else "전방 $d 정체")
             }
             "ICE" -> if (en) "ice risk" else "결빙 위험"
@@ -532,7 +791,8 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         "INCIDENT" -> t[R.string.hz_incident]; "HARD_BRAKE" -> t[R.string.hz_hard_brake]; "BLOCKED" -> t[R.string.hz_blocked]
         "DEBRIS" -> t[R.string.hz_debris]; "SMOKE" -> t[R.string.hz_smoke]; "DOWNHILL" -> t[R.string.hz_downhill]
         "CONGESTION" -> t[R.string.hz_congestion]; "ICING" -> t[R.string.hz_icing]; "HEAVY_RAIN" -> t[R.string.hz_rain]
-        "SIREN" -> t[R.string.hz_siren]; else -> h.optString("label").ifEmpty { h.optString("type") }   // 새 종류(충전기 고장·대기)는 허브가 준 이름
+        "SIREN" -> if (h.optBoolean("beacon") || h.optBoolean("yieldOnly")) h.optString("label") else t[R.string.hz_siren]   // 구급차(위치 신호)·긴급차량 추정은 허브 이름
+        else -> h.optString("label").ifEmpty { h.optString("type") }   // 새 종류(충전기 고장·대기)는 허브가 준 이름
     }
 
     companion object {
@@ -543,6 +803,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         const val RISK_GAP_MS = 600_000L       // 위험성 '높음' 단독 안내: 10분에 한 번
         const val FATIGUE_GAP_MS = 1_800_000L  // 휴식 권장: 30분에 한 번
         val URGENT = setOf("SIREN", "INCIDENT", "HARD_BRAKE")   // 바로 말함
+        val WINDOW_TYPES = setOf("HEAVY_RAIN", "SMOKE")         // 창문이 열려 있으면 닫으라고 덧붙이는 위험(침수 의심 = BLOCKED + flood 도)
         /** 종류별 행동 거리(m): 이보다 멀면 화면에만, 가까워지면 그때 말한다 */
         val SAY_RANGE = mapOf("HARD_BRAKE" to 3000.0, "INCIDENT" to 6000.0, "CONGESTION" to 3000.0, "DEBRIS" to 2000.0, "BLOCKED" to 5000.0,
             "SMOKE" to 2000.0, "DOWNHILL" to 3000.0, "ICING" to 3000.0, "HEAVY_RAIN" to 3000.0, "CHARGER_FAULT" to 10000.0, "CHARGER_WAIT" to 10000.0)
@@ -553,5 +814,40 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         const val OFFICIAL_EVERY_MS = 60_000L
         const val CHARGE_FAIL_SEC = 90   // 꽂은 뒤 이만큼 충전이 시작되지 않으면 충전기 고장 의심
         const val CHARGE_WAIT_SEC = 180  // 정차 뒤 이만큼 지나서 꽂으면 충전 대기로 본다
+        const val CHARGE_ASK_MS = 60_000L   // "충전기 고장인가요?" 답을 기다리는 시간. 지나면 차 신호만 보고(전과 같다)
+        const val CHARGE_MOVE_M = 5.0       // 실패 뒤 이만큼 옮겨 충전되면 '다른 기기'(주차 두 칸 폭 2.5 m × 2 — 같은 자리 2.5 m 와 사이에 위치 흔들림 여유)
+        const val CHARGE_REST_M = 500.0     // 실패 자리에서 이보다 멀어지면 휴게소를 떠난 것(허브 CHARGER_NEAR 와 같다)
+        const val CHARGE_KEEP_MS = 1_800_000L   // 실패 자리를 이만큼(30분) 기억한다
+        /** 접근 경고음 단계 문턱: 꼬리까지 남은 시간(초) 20 → 삐, 12 → 삐삐, 6 → 삐삐삐(반복). 꼬리보다 20 km/h 안으로 줄였으면 울리지 않는다 */
+        val BEEP_TTC = doubleArrayOf(20.0, 12.0, 6.0)
+        const val BEEP_SLOW_KMH = 20.0
+        const val BEEP_CARRY_MS = 5_000L        // 앞 꼬리의 2·3단계가 이만큼 안에 있었으면 다음 꼬리는 2단계부터
+        const val SPEAK_AFTER_BEEP_MS = 600L    // 경고음 뒤 안내 음성까지 띄우는 시간
+        // 길 터 주기(YIELD): 시속 30 이상에서 2초 사이 3 m/s 넘게 감속 + 오른쪽(깜빡이 또는 핸들 10°↑). 60초에 한 번. 실차 문턱 미검증
+        const val YIELD_FROM_MS = 8.3f
+        const val YIELD_DROP_MS = 3f
+        const val YIELD_STEER_DEG = 10f
+        const val YIELD_GAP_MS = 60_000L
+        const val HARD_BRAKE_FROM_MS = 5f      // 급제동: 이 속도(18 km/h) 이상에서
+        const val HARD_BRAKE_DROP_MS = 3f      //   1초 사이 이만큼 감속
+        const val HARD_BRAKE_REBOUND_MS = 1f   //   다음 1초에 이만큼 넘게 다시 빨라지면 순간 출렁임
+        const val HARD_BRAKE_GAP_MS = 10_000L
+        const val SWERVE_FROM_MS = 11f         // 급조향: 40 km/h 넘게
+        const val SWERVE_GAP_MS = 15_000L
+        const val BRAKE_HOLD_FROM_MS = 8f      // 긴 내리막: 30 km/h 넘게
+        const val BRAKE_HOLD_MS = 20_000L
+        const val TURNBACK_MS = 3_000L         // 도로 위 후진 기어 이만큼이면 되돌아감
+        const val AIRBAG_WATCH_MS = 30_000L    // 충돌 뒤 에어백을 읽는 시간
+        const val SIREN_REPORT_MS = 5_000L     // 마이크가 듣는 동안 허브 보고 간격
+
+        /** 급제동 판정(직전 두 속도와 지금 속도, m/s). 쿨다운은 호출하는 쪽 */
+        fun isHardBrake(prev2: Float, prev: Float, now: Float): Boolean =
+            prev2 >= HARD_BRAKE_FROM_MS && prev2 - prev >= HARD_BRAKE_DROP_MS && now <= prev + HARD_BRAKE_REBOUND_MS
+        /** 길 비킴 판정(2초 전 속도, 지금 속도, 오른쪽 깜빡이, 핸들 각 — 오른쪽 양수) */
+        fun isYield(prev2: Float, now: Float, rightSignal: Boolean, steer: Float?): Boolean =
+            prev2 >= YIELD_FROM_MS && prev2 - now >= YIELD_DROP_MS && (rightSignal || (steer != null && steer >= YIELD_STEER_DEG))
+        /** 급조향 판정(1초 전·지금 핸들 각, 속도, 브레이크) — 각 차이는 DriveRisk.SWERVE_DEG(60°)와 같은 문턱 */
+        fun isSwerve(prevSteer: Float?, steer: Float?, speed: Float, brake: Boolean?): Boolean =
+            steer != null && prevSteer != null && speed > SWERVE_FROM_MS && abs(steer - prevSteer) >= DriveRisk.SWERVE_DEG && brake != true
     }
 }

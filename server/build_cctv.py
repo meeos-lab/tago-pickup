@@ -11,11 +11,17 @@
 import json
 import re
 import sys
+import time
+import urllib.parse
+import urllib.request
+from collections import Counter
 from pathlib import Path
 
 import openpyxl
 
 from build_daechi_map import BBOX, in_bbox
+
+
 
 # 간선도로(07–22시 단속)와 이면도로(08–22시)를 나누는 기준: 강남구 안내의 간선도로 이름 [추정 분류]
 ARTERIAL = {"도곡로", "삼성로", "남부순환로", "영동대로", "선릉로", "역삼로", "테헤란로", "언주로", "봉은사로"}
@@ -34,7 +40,7 @@ def parse_road(addr):
 
 def osm_index(path):
     idx = {}
-    for el in json.load(open(path, encoding="utf-8"))["elements"]:
+    for el in json.loads(Path(path).read_text(encoding="utf-8"))["elements"]:
         t = el.get("tags", {})
         c = (el["lat"], el["lon"]) if "lat" in el else ((el["center"]["lat"], el["center"]["lon"]) if el.get("center") else None)
         num = re.match(r"^(\d+)", t.get("addr:housenumber", ""))
@@ -58,9 +64,6 @@ def nominatim(query, cache):
     """OSM 주소에 없는 대치동 CCTV만 Nominatim으로 한 건씩 찾는다(공개 시설 주소, 1초 간격). 결과는 캐시 파일에 남긴다."""
     if query in cache:
         return cache[query]
-    import time
-    import urllib.parse
-    import urllib.request
     time.sleep(1.1)
     url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode({"q": query, "format": "json", "limit": 1, "countrycodes": "kr"})
     req = urllib.request.Request(url, headers={"User-Agent": "pleos-meeos-prototype/0.1 (contest demo)", "Accept-Language": "ko"})
@@ -107,7 +110,6 @@ def main(xlsx, osm_addr, out="daechi_cctv.json"):
                          "arterial": bool(pr) and road in ARTERIAL and not re.search(r"\d+길$", pr[0]),
                          "night": no in night, "weekend": no in weekend})
     # 서로 다른 주소가 같은 좌표로 나오면 Nominatim이 동 중심점을 돌려준 것이므로 버린다
-    from collections import Counter
     dup = Counter((x["lat"], x["lon"]) for x in out_rows if x["match"] == "nominatim")
     for x in [x for x in out_rows if x["match"] == "nominatim" and dup[(x["lat"], x["lon"])] > 1]:
         out_rows.remove(x)

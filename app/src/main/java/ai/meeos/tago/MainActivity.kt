@@ -1,5 +1,6 @@
 ﻿package ai.meeos.tago
 
+import ai.meeos.tago.app.Edition
 import ai.meeos.tago.app.AppController
 import ai.meeos.tago.app.AppLog
 import ai.meeos.tago.app.DemoHooks
@@ -35,7 +36,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -68,6 +68,8 @@ class MainActivity : ComponentActivity() {
     private val uiState = mutableStateOf<TagoUiState?>(null)
     // 차 화면 지도: TMAP 앱키가 있으면 네이티브 TMAP SDK(순정 커서·티맵 노선), 없거나 인증에 실패하면 웹 지도(/car/)
     private var tmap: ai.meeos.tago.map.TmapCarMap? = null
+    /** 지역 id → 거리 단위("km"·"mi"), 지역 프로필(assets regions/<id>.json units)에서 */
+    private val unitsCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var tmapFailed = false
     private val nativeMap = mutableStateOf(false)
 
@@ -82,7 +84,6 @@ class MainActivity : ComponentActivity() {
             car = CarSignals(this, main, log), voice = voice,
             navi = NaviBridge(applicationContext, main, log) { services.region },
             dialog = Dialog(voice) { app.render() },
-            demoHooks = BuildConfig.DEMO_HOOKS,
         )
         if (BuildConfig.TMAP_KEY.isNotBlank()) {
             ai.meeos.tago.map.TmapCarMap.TMAP_KEY_FOR_ROUTE = BuildConfig.TMAP_KEY
@@ -90,6 +91,12 @@ class MainActivity : ComponentActivity() {
                 ai.meeos.tago.map.TmapCarMap(this, BuildConfig.TMAP_KEY, BuildConfig.SERVER_URL, { services.log.d("[TMAP] $it") }) { tmapFailed = true; loadMap() }
             }.onFailure { services.log.d("TMAP 지도를 만들지 못해 웹 지도로: ${it.message}") }.getOrNull()
         }
+        // 지역 프로필의 거리 단위(mi·km) — 도로 링크가 join 에 싣는다. startEmbeddedServer 가 io 스레드에서 프로필을 읽을 때 채우고,
+        // 그 전에 불리면(PC 서버 모드) 한 번 읽어 둔다(프로필은 자산이라 바뀌지 않는다)
+        services.regionUnits = { id -> unitsCache.getOrPut(id) {
+            runCatching { org.json.JSONObject(assets.open("regions/$id.json").use { String(it.readBytes(), Charsets.UTF_8) }).optString("units", "km") }
+                .getOrDefault("km").takeIf { it == "mi" } ?: "km"
+        } }
         app = AppController(this, services, ::setMapUrl, ::dial)
         app.onUiState = { uiState.value = it; syncForegroundService() }
         // 말하는 동안 지도(WebView) 타이머를 멈추던 최적화는 뺐다: pauseTimers 는 파싱·fetch 콜백까지 멈춰 지도가 빈 채로 남는 일이 잦았고(실측),
@@ -113,11 +120,26 @@ class MainActivity : ComponentActivity() {
             onEndRoad = { app.road.end() },
             onRegion = { app.setRegion(it) },
             onToggleDev = { app.toggleDevPanel() },
+            onStudyOpen = { app.openStudy() },
+            onStudyAge = { app.studyAge(it) },
+            onStudyYears = { app.studyYears(it) },
+            onStudyCar = { app.studyCar(it) },
+            onStudyAgree = { app.studyAgree() },
+            onStudyClose = { app.closeStudy() },
+            onStudyExport = { exportStudy() },
+            onStudyUpload = { app.studyUpload(it) },
+            onStudyStop = { app.studyStop() },
+            onChargeOpen = { app.road.openSurvey() },
+            onChargePick = { app.road.surveyPick(it) },
+            onChargeSkip = { app.road.surveySkip() },
+            onChargeBack = { app.road.surveyBack() },
+            onChargeClose = { app.road.surveyClose() },
         )
+        app.requestGps = { runCatching { requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), REQ_STUDY_GPS) } }
         app.road.onCrashHelp = { app.emergency.start() }   // 충돌 뒤 무응답·[도움 필요] → 응급 카드(2차 사고 예방 모드)
         setContent {
             TagoTheme {
-                val state by uiState
+                val state = uiState.value
                 // 가로↔세로 배치가 바뀌면 지도 슬롯이 다시 만들어진다 — 이미 붙어 있던 WebView 를 떼어 다시 넣는다
                 // 차 화면 픽업 지도는 네이티브 TMAP(있을 때), 나머지(함께 가기 등)는 WebView
                 val native = nativeMap.value
@@ -128,7 +150,7 @@ class MainActivity : ComponentActivity() {
                     Modifier.fillMaxSize().then(if (frame != null) Modifier.background(Color(0xFF7F7F7F)) else Modifier)
                 ) {
                     Box(if (frame != null) Modifier.size(frame.first.dp, frame.second.dp).clipToBounds() else Modifier.fillMaxSize()) {
-                        TagoScreen(state!!, actions) { mod ->
+                        TagoScreen(state, actions) { mod ->
                             if (native || needWeb) {
                                 val v: android.view.View = if (native) tmap!!.view else web
                                 key(native, gen) { AndroidView(factory = { (v.parent as? android.view.ViewGroup)?.removeView(v); v }, modifier = mod) }
@@ -145,13 +167,35 @@ class MainActivity : ComponentActivity() {
         requestRuntimePermissions()
     }
 
+    /** 연구 기록: 화면을 누른 시각(경고를 본 단서). 누름을 가로채지 않고 기록만 한다 */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN && ::app.isInitialized) app.study.touch()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_STUDY_GPS) app.study.refreshSensors()
+    }
+
+    /** 연구 기록 내보내기: 쓰기 줄이 다 끝난 뒤 공유 시트(없으면 앱 외부 폴더에만 복사) */
+    fun exportStudy() {
+        val f = app.study.file ?: return
+        app.study.afterWrites {
+            if (!f.exists()) { app.studyToast(services.texts[R.string.toast_study_empty]); return@afterWrites }
+            val (shared, copy) = ai.meeos.tago.study.StudyExport.share(this, f)
+            services.log.d("연구 기록 내보내기: 공유=${shared} 복사=${copy != null}"); services.log.demo("연구 기록 파일 ${f.name} → ${copy?.path}")
+            app.studyToast(if (shared) services.texts[R.string.toast_study_shared] else services.texts[R.string.toast_study_copied, "files/study/${f.name}"])
+        }
+    }
+
     /** 위험 권한은 설치만으로 주어지지 않는다(차 속도 CAR_SPEED, 사이렌 감지 마이크) — 없으면 한 번 묻는다 */
     private fun requestRuntimePermissions() {
         val want = buildList {
             add("android.car.permission.CAR_SPEED")
-            if (BuildConfig.ROAD_LINK) add(android.Manifest.permission.RECORD_AUDIO)
+            if (Edition.roadLink) add(android.Manifest.permission.RECORD_AUDIO)
         }.filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
-        if (want.isNotEmpty()) runCatching { requestPermissions(want.toTypedArray(), 7) }
+        if (want.isNotEmpty()) runCatching { requestPermissions(want.toTypedArray(), REQ_RUNTIME) }
     }
 
     /** 포그라운드 서비스는 픽업·함께 가기가 진행 중일 때만(순정 내비가 앞에 와도 그 일을 이어가게). 아무 일도 없으면 내린다 */
@@ -185,6 +229,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         app.paused = true
+        app.study.appVisible(false)
         webOrNull?.let { runCatching { it.onPause(); it.pauseTimers() } }
         tmap?.onPause()
     }
@@ -192,6 +237,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         app.paused = false
+        app.study.appVisible(true)
         webOrNull?.let { runCatching { it.onResume(); it.resumeTimers() } }
         tmap?.onResume()
     }
@@ -204,6 +250,7 @@ class MainActivity : ComponentActivity() {
         services.car.release()
         services.navi.release()
         services.voice.release()
+        app.study.release()
         webOrNull?.let { w -> runCatching { (w.parent as? android.view.ViewGroup)?.removeView(w); w.stopLoading(); w.destroy() } }
         webOrNull = null
         io.shutdown()
@@ -219,16 +266,18 @@ class MainActivity : ComponentActivity() {
                 val engines = Region.entries.map { it.id }.associateWith { id ->
                     val profile = text("regions/$id.json")
                     val pj = JSONObject(profile)
+                    unitsCache.putIfAbsent(id, pj.optString("units", "km").takeIf { it == "mi" } ?: "km")   // 거리 단위는 여기(io)서 미리
                     MeeosEngine(text(pj.getString("map")), pj.optString("cctv").takeIf { it.isNotEmpty() && it != "null" }?.let { runCatching { text(it) }.getOrNull() }, profile)
                 }
                 val page = assets.open("rider.html").use { it.readBytes() }
                 // 함께 가기(차대차 링크) 엔진: 시연 경로 경부고속도로 하행. 픽업 APK에는 함께 가기 자산이 없다
-                val link = if (BuildConfig.ROAD_LINK) LinkHub(text("link/gyeongbu_route.json")) else null
+                val link = if (Edition.roadLink) LinkHub(text("link/gyeongbu_route.json")) else null
                 val linkPage = runCatching { assets.open("link/link.html").use { it.readBytes() } }.getOrNull()
                 val worldPage = runCatching { assets.open("link/world.html").use { it.readBytes() } }.getOrNull()
                 server = LocalServer(engines, page, link = link, linkPage = linkPage, worldPage = worldPage,
                     assetReader = { n -> runCatching { assets.open(n).use { it.readBytes() } }.getOrNull() },
                     allowLatest = BuildConfig.DEMO_HOOKS).also { it.start() }
+                runOnUiThread { app.serverReady() }   // 대기 화면 지도(길벗: 경로 미리보기)는 서버가 뜬 뒤에 연다
                 // 포그라운드 서비스는 픽업·함께 가기가 시작될 때 붙인다(syncForegroundService)
             }.onFailure { e -> services.log.d("내장 서버 시작 실패: ${e.message}") }
         }
@@ -315,5 +364,10 @@ class MainActivity : ComponentActivity() {
         if (intent.resolveActivity(packageManager) == null) return false
         startActivity(intent)
         return true
+    }
+
+    private companion object {
+        const val REQ_RUNTIME = 7      // 권한 요청 코드: 차 속도·마이크
+        const val REQ_STUDY_GPS = 8    // 연구 기록: 차속 신호 없는 차의 GPS 속도
     }
 }

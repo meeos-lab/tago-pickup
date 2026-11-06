@@ -25,8 +25,9 @@ import ai.pleos.playground.tts.listener.OnInitializeListener as TtsInit
 class VoiceAssistant(private val context: Context, private val main: Handler, private val log: AppLog) {
     private var tts: TextToSpeech? = null
     private var stt: SpeechToText? = null
-    private var ttsReady = false
-    private var sttReady = false
+    @Volatile private var ttsReady = false   // SDK 초기화 콜백(스레드 미확인)에서 쓰고 메인에서 읽는다
+    @Volatile private var sttReady = false
+    @Volatile private var released = false   // 해제 뒤 미뤄 둔 작업(포커스 재시도·막힘 감시·듣기 끝)이 돌지 않게
 
     @Volatile var speaking = false
         private set
@@ -58,6 +59,8 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
         .build()
     private var focusTries = 0
     private var current: String? = null
+    /** 지금 말하고 있는 문장(연구 기록이 경고 음성의 실제 시작·끝 시각을 맞춘다) */
+    val currentText: String? get() = current
     private var listenSeq = 0
 
     /** 질문을 마친 뒤 들을지(대기 중인 질문이 있는지) */
@@ -113,11 +116,11 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
     fun say(text: String) {
         log.demo("[음성] $text")   // 문장에는 아이 이름·만날 곳이 들어 있다 — 제품 빌드 로그에는 남기지 않는다
         main.post {
-            if (!ttsReady) { queue.addLast(text); while (queue.size > 3) queue.removeFirst(); return@post }
+            if (!ttsReady) { queue.addLast(text); while (queue.size > QUEUE_MAX) queue.removeFirst(); return@post }
             // 15초 넘게 끝 신호가 없으면 막힌 것으로 보고 그냥 말한다
-            if (speaking && System.currentTimeMillis() - speakStartedAt < 15_000) {
+            if (speaking && System.currentTimeMillis() - speakStartedAt < STUCK_MS) {
                 queue.addLast(text)
-                while (queue.size > 3) queue.removeFirst()
+                while (queue.size > QUEUE_MAX) queue.removeFirst()
             } else speakNow(text)
         }
     }
@@ -126,7 +129,7 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
         if (!requestFocus()) {
             // 포커스 거절(Gleo 말하는 중 등): 문장을 줄 맨 앞에 두고 잠시 뒤 다시
             queue.addFirst(text)
-            if (focusTries++ < 6) main.postDelayed({ if (!speaking && queue.isNotEmpty()) speakNext() }, 1500)
+            if (focusTries++ < FOCUS_RETRIES) main.postDelayed({ if (!released && !speaking && queue.isNotEmpty()) speakNext() }, FOCUS_RETRY_MS)
             else { log.d("오디오 포커스를 받지 못해 안내 ${queue.size}개를 건너뜀"); queue.clear(); focusTries = 0 }
             return
         }
@@ -135,7 +138,7 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
         val startedAt = speakStartedAt
         runCatching { tts?.speak(text) }.onFailure { speaking = false }
         // 끝 신호(onDone/onStop)가 15초 넘게 없으면 막힌 것으로 보고 끝낸다 — 지도 타이머가 영영 멈추지 않게
-        main.postDelayed({ if (speaking && speakStartedAt == startedAt) { log.d("TTS 끝 신호 없음 — 강제 종료"); finished() } }, 15_000)
+        main.postDelayed({ if (!released && speaking && speakStartedAt == startedAt) { log.d("TTS 끝 신호 없음 — 강제 종료"); finished() } }, STUCK_MS)
     }
 
     /** 줄 선 문장이 있으면 이어서 말한다 — true면 이번 끝은 질문의 끝이 아니다 */
@@ -178,7 +181,7 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
         onListeningChanged()
         runCatching { stt?.request() }.onFailure { listening = false; onListeningChanged() }
         val seq = ++listenSeq
-        main.postDelayed({ if (listening && seq == listenSeq) { log.d("20초 동안 답이 없어 듣기를 멈춤(버튼으로 답할 수 있음)"); stopListening() } }, 20_000)
+        main.postDelayed({ if (!released && listening && seq == listenSeq) { log.d("20초 동안 답이 없어 듣기를 멈춤(버튼으로 답할 수 있음)"); stopListening() } }, LISTEN_MS)
     }
 
     private val sttListener = object : ResultListener {
@@ -205,8 +208,17 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
     }
 
     fun release() {
+        released = true
         abandonFocus()
         runCatching { tts?.release() }
         runCatching { stt?.release() }
+    }
+
+    private companion object {
+        const val QUEUE_MAX = 3            // 말하기 대기열 상한(넘으면 오래된 것부터 버린다)
+        const val STUCK_MS = 15_000L       // TTS 끝 신호가 이만큼 없으면 막힌 것으로 본다
+        const val FOCUS_RETRIES = 6        // 오디오 포커스를 못 얻었을 때 다시 시도하는 횟수
+        const val FOCUS_RETRY_MS = 1500L
+        const val LISTEN_MS = 20_000L      // 답을 기다리는 시간
     }
 }

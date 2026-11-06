@@ -13,7 +13,7 @@ import kotlin.math.abs
  */
 class NearbyOffers(private val s: Services, private val pickup: PickupController) {
     /** 주문 단계: "" → listen(주문 듣기) → confirm(다시 읽고 확인) → placed(주문 카드) → done */
-    var orderStage = ""
+    var orderStage = OrderStage.NONE
         private set
     var orderItems: List<Pair<Int, String>> = emptyList()
         private set
@@ -34,7 +34,7 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
     private val t get() = s.texts
 
     fun reset() {
-        orderStage = ""; orderItems = emptyList(); orderPlace = null; orderNo = ""; offer = null; offerKind = "parking"
+        orderStage = OrderStage.NONE; orderItems = emptyList(); orderPlace = null; orderNo = ""; offer = null; offerKind = "parking"
         dtSuggested = false; storeArrived = false; lead = ""
     }
 
@@ -90,7 +90,7 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
         return when (kind) {
             "takeout" -> {
                 val slack = p.optInt("slackSec")
-                val late = p.optInt("lateSec").let { if (it < 45) 0 else it }   // 45초 미만은 '늦지 않음'으로
+                val late = p.optInt("lateSec").let { if (it < ON_TIME_S) 0 else it }   // 45초 미만은 '늦지 않음'으로
                 val why = if (lead.isNotEmpty()) "" else t[R.string.takeout_slack, pickup.member?.name ?: "", t.mins(slack)]
                 val text = if (late == 0) t[R.string.say_takeout_offer, lead + why, name] else t[R.string.say_takeout_offer_late, lead, name, t.mins(late)]
                 if (s.lang == "en") text.replaceFirstChar { it.uppercase() } else text
@@ -145,22 +145,25 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
 
     // 메뉴 키워드(목업 데이터): 매장 메뉴 API가 없어서 말에서 품목만 뽑는다. 실제는 매장 주문 시스템과 연동해야 한다
     private val menu = listOf(
-        "burger|버거|햄버거" to ("Famous Star burger" to "버거"), "fries|감자|감튀" to ("Fries" to "감자튀김"),
-        "shake|쉐이크|셰이크" to ("Shake" to "셰이크"), "tender|nugget|너겟|치킨" to ("Chicken tenders" to "치킨 텐더"),
-        "taco|타코" to ("Taco" to "타코"), "burrito|부리토" to ("Burrito" to "부리토"),
-        "coffee|latte|americano|커피|아메리카노|라떼" to ("Coffee" to "커피"), "juice|주스|쥬스" to ("Juice" to "주스"),
-        "sandwich|샌드위치" to ("Sandwich" to "샌드위치"), "cookie|쿠키" to ("Cookie" to "쿠키"), "cake|케이크|케익" to ("Cake" to "케이크"),
-        "milk|우유" to ("Milk" to "우유"), "soda|coke|drink|lemonade|콜라|음료|사이다" to ("Soda" to "콜라"),
+        Regex("burger|버거|햄버거") to ("Famous Star burger" to "버거"), Regex("fries|감자|감튀") to ("Fries" to "감자튀김"),
+        Regex("shake|쉐이크|셰이크") to ("Shake" to "셰이크"), Regex("tender|nugget|너겟|치킨") to ("Chicken tenders" to "치킨 텐더"),
+        Regex("taco|타코") to ("Taco" to "타코"), Regex("burrito|부리토") to ("Burrito" to "부리토"),
+        Regex("coffee|latte|americano|커피|아메리카노|라떼") to ("Coffee" to "커피"), Regex("juice|주스|쥬스") to ("Juice" to "주스"),
+        Regex("sandwich|샌드위치") to ("Sandwich" to "샌드위치"), Regex("cookie|쿠키") to ("Cookie" to "쿠키"), Regex("cake|케이크|케익") to ("Cake" to "케이크"),
+        Regex("milk|우유") to ("Milk" to "우유"), Regex("soda|coke|drink|lemonade|콜라|음료|사이다") to ("Soda" to "콜라"),
     )
+    private val orderSplit = Regex(",|\\band\\b|그리고|랑|하고|\\.")   // 주문 조각 나누기
+    private val digits = Regex("\\d+")
+    private val spaces = Regex("\\s+")
     private val numberWords = mapOf("a" to 1, "an" to 1, "one" to 1, "two" to 2, "three" to 3, "four" to 4, "하나" to 1, "한" to 1, "둘" to 2, "두" to 2, "셋" to 3, "세" to 3, "넷" to 4, "네" to 4)
 
     /** "two burgers and a soda" / "버거 두 개랑 콜라 하나" → [(2, 버거), (1, 콜라)] */
     fun parseOrder(text: String): List<Pair<Int, String>> {
         val out = mutableListOf<Pair<Int, String>>()
-        for (seg in text.lowercase().split(Regex(",|\\band\\b|그리고|랑|하고|\\."))) {
-            val item = menu.firstOrNull { Regex(it.first).containsMatchIn(seg) } ?: continue
-            val qty = Regex("\\d+").find(seg)?.value?.toInt()
-                ?: seg.split(Regex("\\s+")).firstNotNullOfOrNull { numberWords[it] }
+        for (seg in text.lowercase().split(orderSplit)) {
+            val item = menu.firstOrNull { it.first.containsMatchIn(seg) } ?: continue
+            val qty = digits.find(seg)?.value?.toInt()
+                ?: seg.split(spaces).firstNotNullOfOrNull { numberWords[it] }
                 ?: numberWords.entries.firstOrNull { seg.contains(it.key) && it.key.length > 1 && it.key.all { c -> c in '가'..'힣' } }?.value ?: 1
             val name = if (s.lang == "ko") item.second.second else item.second.first
             val i = out.indexOfFirst { it.second == name }
@@ -175,7 +178,7 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
     private fun orderSpoken() = orderItems.joinToString(", ") { (q, n) -> if (s.lang == "ko") "$n ${q}개" else "$q ${if (q > 1 && !n.endsWith("s")) n + "s" else n}" }
 
     private fun listenForOrder() {
-        orderStage = "listen"
+        orderStage = OrderStage.LISTEN
         s.dialog.ask(Question(Question.Kind.ORDER_TEXT, listenHint = t[R.string.listen_order], onText = ::takeOrder))
         s.render()
     }
@@ -187,7 +190,7 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
             return
         }
         orderItems = items
-        orderStage = "confirm"
+        orderStage = OrderStage.CONFIRM
         s.dialog.ask(Question(Question.Kind.ORDER_CONFIRM, t[R.string.btn_yes_order], t[R.string.btn_say_again], t[R.string.listen_yes_no], onAnswer = ::answerOrderConfirm),
             t[R.string.say_order_confirm, orderSpoken()])
         s.render()
@@ -204,11 +207,11 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
     private fun answerOrderConfirm(yes: Boolean) {
         val p = offer ?: return
         if (!yes) { s.say(t[R.string.say_say_again]); listenForOrder(); return }
-        orderStage = "placed"; storeArrived = false
+        orderStage = OrderStage.PLACED; storeArrived = false
         orderNo = orderPartner.place(p.getString("name"), orderItems)
         // 매장을 경유지로 서버에 알린다 → 지도에 차 → 매장 → 만남 지점 실제 경로가 그려진다
         pickup.sessionId?.let { sid -> p.optJSONArray("curb")?.let { c -> pickup.post("/api/session/$sid/via", JSONObject().put("lat", c.getDouble(0)).put("lon", c.getDouble(1)).put("name", p.getString("name"))) } }
-        s.log.d("주문(${orderPartner.label}) $orderNo: ${p.getString("name")} ${orderSummary()}")
+        s.log.d("주문(${orderPartner.label}) $orderNo"); s.log.demo("주문 $orderNo: ${p.getString("name")} ${orderSummary()}")
         pickup.routeWithStop(p)                       // 순정 내비: 만날 곳까지, 매장 경유
         s.say(if (offerKind == "takeout") t[R.string.say_order_placed_takeout, p.getString("name")] else t[R.string.say_order_placed_drivethru])
         s.render()
@@ -217,20 +220,27 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
     /** 매장 앞에 서면 안내, 다시 출발하면 경유지를 내비·지도에서 지운다 */
     fun checkStoreStop() {
         val vx = pickup.lastState?.optDouble("viaX")?.takeIf { !it.isNaN() } ?: return
-        if (orderStage != "placed") return
-        val near = abs(pickup.progress - vx) < 60
+        if (orderStage != OrderStage.PLACED) return
+        val near = abs(pickup.progress - vx) < STORE_NEAR_M
         if (!storeArrived && near && s.car.speedMs < 1f) {
             storeArrived = true
             val sn = orderPlace?.optString("name") ?: ""
             val tx = pickup.targetX() ?: Double.NaN
             // 매장이 만날 곳 바로 옆이면(30m 안) 기다리는 동안 받아 오면 된다
-            s.say(if (!tx.isNaN() && abs(vx - tx) < 30) t[R.string.say_store_next_door, sn] else t[R.string.say_store_arrived, sn])
-        } else if (storeArrived && s.car.speedMs > 2f) {
-            storeArrived = false; orderStage = "done"
+            s.say(if (!tx.isNaN() && abs(vx - tx) < STORE_NEXT_DOOR_M) t[R.string.say_store_next_door, sn] else t[R.string.say_store_arrived, sn])
+        } else if (storeArrived && s.car.speedMs > DEPART_MS) {
+            storeArrived = false; orderStage = OrderStage.DONE
             s.navi.clearWaypoints()
             pickup.sessionId?.let { pickup.post("/api/session/$it/via", JSONObject()) }
-            if (pickup.status != "arrived") s.say(t[R.string.say_back_to_meeting_point])
+            if (pickup.status != PickupStatus.ARRIVED) s.say(t[R.string.say_back_to_meeting_point])
             s.render()
         }
+    }
+
+    private companion object {
+        const val ON_TIME_S = 45            // 이보다 덜 늦으면 '늦지 않음'
+        const val STORE_NEAR_M = 60.0       // 경유 매장 앞에 선 것으로 보는 거리
+        const val STORE_NEXT_DOOR_M = 30.0  // 매장이 만날 곳 바로 옆
+        const val DEPART_MS = 2f            // 매장에서 다시 출발한 것으로 보는 속도(m/s)
     }
 }

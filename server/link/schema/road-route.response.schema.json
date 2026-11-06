@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-route.response",
+  "title": "GET /api/road/route(= GET /api/link/route) 200 응답",
+  "type": "object",
+  "required": ["api", "name", "nameEn", "route", "length", "restAreas", "zones", "sources"],
+  "properties": {
+    "api": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/api"},
+    "name": {"type": "string"},
+    "nameEn": {"type": "string"},
+    "route": {"type": "array", "items": {"type": "array", "minItems": 2, "items": {"type": "number"}}},
+    "length": {"type": "number"},
+    "restAreas": {"type": "array", "items": {"type": "object", "required": ["name", "s"]}},
+    "zones": {"type": "array"},
+    "sources": {"type": "array"}
+  }
+}

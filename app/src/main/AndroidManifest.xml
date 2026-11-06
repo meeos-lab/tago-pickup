@@ -29,13 +29,32 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- TMAP SDK 가 지도 설정·타일을 받기 전에 망 상태를 본다(공식 샘플과 같다). 위치 권한은 쓰지 않는다 — 내 차 위치는 차량 신호·엔진에서 넣는다 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 연구 기록(경고 반응 로그, 참가자가 동의할 때만): 방향지시등(차로 변경 후보) 읽기, 차속 신호가 없는 차에서만 GPS 속도(좌표는 저장하지 않는다) -->
+    <uses-permission android:name="pleos.car.permission.CAR_LIGHTS" />
+    <!-- 위치 권한은 연구 기록이 켜진 빌드(debug·qa, release -Pmeeos.study=true)에만: 아니면 자리표시자가 쓰지 않는 이름이 된다 -->
+    <uses-permission android:name="${studyLocationPermission}" />
     <!-- 순정 내비가 앞에 있어도 픽업(아이 폰 연결·탑승 판단)을 이어가는 포그라운드 서비스 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- Android 11+ 패키지 가시성: 선언하지 않은 앱은 resolveActivity() 가 못 본다 — 응급 [119 전화 화면](MainActivity.dial)과
+         연구 기록 공유 시트(StudyExport)가 다이얼러·공유 앱이 있어도 "없음"으로 끝나지 않게 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:label="${appLabel}"
+        android:icon="${appIcon}"
+        android:roundIcon="${appIcon}"
         tools:replace="android:allowBackup,android:label"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
@@ -69,6 +88,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <!-- 연구 기록 내보내기(공유 시트): files/study/ 의 세션 JSONL 만 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.study"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/study_paths" />
+        </provider>
         <service
             android:name=".PickupService"
             android:exported="false"

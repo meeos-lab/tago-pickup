@@ -21,7 +21,7 @@ FACILITY = {"301": "안심벨", "302": "CCTV", "303": "안내표지판", "304": 
 
 
 def dbf(path, enc="cp949"):
-    b = open(path, "rb").read()
+    b = Path(path).read_bytes()
     n, hlen, rlen = struct.unpack("<IHH", b[4:12])
     fields, off = [], 32
     while b[off] != 0x0D:
@@ -38,7 +38,7 @@ def dbf(path, enc="cp949"):
 
 
 def shp_points(path):
-    b, off, pts = open(path, "rb").read(), 100, []
+    b, off, pts = Path(path).read_bytes(), 100, []
     while off < len(b):
         clen = struct.unpack(">I", b[off + 4:off + 8])[0] * 2
         pts.append(struct.unpack("<dd", b[off + 12:off + 28]) if struct.unpack("<i", b[off + 8:off + 12])[0] == 1 else None)
@@ -56,7 +56,9 @@ def main(parking_csv, toilet_csv, shp_base):
     m = json.loads(path.read_text(encoding="utf-8"))
 
     parking = []
-    for r in csv.DictReader(open(parking_csv, encoding="cp949")):
+    with open(parking_csv, encoding="cp949") as f:
+        parking_rows = list(csv.DictReader(f))
+    for r in parking_rows:
         lat, lon = float(r["위도"]), float(r["경도"])
         if not inside(lat, lon):
             continue
@@ -68,7 +70,9 @@ def main(parking_csv, toilet_csv, shp_base):
     # 역 화장실: 위치는 OSM 출입구(가까운 출입구 번호 → 그 출구, 없으면 첫 출구)
     exits = {c["name"]: c for c in m["candidates"] if c["kind"] == "subway"}
     toilets = []
-    for r in csv.DictReader(open(toilet_csv, encoding="cp949")):
+    with open(toilet_csv, encoding="cp949") as f:
+        toilet_rows = list(csv.DictReader(f))
+    for r in toilet_rows:
         r = {k.strip(): (v or "").strip() for k, v in r.items()}
         st = r["역명"]
         ex = exits.get(f"{st}역 {r['(근접) 출입구 번호']}번 출구") or next((c for n, c in exits.items() if n.startswith(f"{st}역")), None)

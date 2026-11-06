@@ -3,6 +3,10 @@ package ai.meeos.tago.ui.screens
 import ai.meeos.tago.R
 import ai.meeos.tago.ui.CardTone
 import ai.meeos.tago.ui.CardUi
+import ai.meeos.tago.ui.StudyUi
+import ai.meeos.tago.ui.ChargeReportUi
+import ai.meeos.tago.ui.SurveyTileUi
+import ai.meeos.tago.ui.components.ButtonSize
 import ai.meeos.tago.ui.Panel
 import ai.meeos.tago.ui.TagoUiState
 import ai.meeos.tago.ui.components.AnswerChips
@@ -21,6 +25,15 @@ import ai.meeos.tago.ui.components.TagoToast
 import ai.meeos.tago.ui.theme.Dim
 import ai.meeos.tago.ui.theme.Tago
 import ai.meeos.tago.ui.theme.TagoType
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -59,6 +73,22 @@ class TagoActions(
     val onEndRoad: () -> Unit,
     val onRegion: (String) -> Unit,
     val onToggleDev: () -> Unit,
+    // 연구 기록(경고 반응 로그) — 대기 화면 버튼, 동의 화면, 기록 상태
+    val onStudyOpen: () -> Unit = {},
+    val onStudyAge: (String) -> Unit = {},
+    val onStudyYears: (Int) -> Unit = {},
+    val onStudyCar: (String) -> Unit = {},
+    val onStudyAgree: () -> Unit = {},
+    val onStudyClose: () -> Unit = {},
+    val onStudyExport: () -> Unit = {},
+    val onStudyUpload: (String) -> Unit = {},
+    val onStudyStop: () -> Unit = {},
+    // 충전기 고장 신고(1분 설문)
+    val onChargeOpen: () -> Unit = {},
+    val onChargePick: (String) -> Unit = {},
+    val onChargeSkip: () -> Unit = {},
+    val onChargeBack: () -> Unit = {},
+    val onChargeClose: () -> Unit = {},
 )
 
 /**
@@ -113,6 +143,8 @@ private fun StatusPanel(state: TagoUiState, actions: TagoActions, fillHeight: Bo
                 is Panel.Pickup -> PickupContent(state, p, actions)
                 is Panel.RoadLink -> RoadContent(state, p, actions, compact)
                 is Panel.Emergency -> EmergencyContent(p, actions)
+                is Panel.Study -> StudyContent(p.ui, actions)
+                is Panel.ChargeReport -> ChargeReportContent(p.ui, actions)
             }
             if (state.regions != null && state.regionTitle != null) Column(verticalArrangement = Arrangement.spacedBy(Dim.gapS)) {
                 SectionTitle(state.regionTitle)
@@ -138,6 +170,52 @@ private fun ColumnScope.IdleContent(p: Panel.Idle, actions: TagoActions) {
     Column(verticalArrangement = Arrangement.spacedBy(Dim.gap)) {
         if (p.roadLinkLabel != null) TagoButton(p.roadLinkLabel, actions.onRoadLink, Modifier.fillMaxWidth(), ButtonVariant.PRIMARY, icon = R.drawable.ic_car, alignStart = true)
         MemberList(p.members) { actions.onMember(it.name) }
+        if (p.studyLabel != null) TagoButton(p.studyLabel, actions.onStudyOpen, Modifier.fillMaxWidth(), ButtonVariant.SECONDARY, ButtonSize.M, icon = R.drawable.ic_timer, alignStart = true)
+    }
+}
+
+/** 연구 기록: 동의 안내(얇은 테두리 카드) → 연령대 → 운전 경력 → 차종 → [동의하고 기록 시작][동의 안 함]. 기록 중이면 상태 → 내보내기 → 업로드 → 끄기 */
+@Composable
+private fun ColumnScope.StudyContent(u: StudyUi, actions: TagoActions) {
+    val c = Tago.colors
+    Column(verticalArrangement = Arrangement.spacedBy(Dim.section)) {
+        if (!u.active) {
+            // 동의 문구는 잘리면 안 된다: 카드 줄(최대 3줄) 대신 줄 제한 없이 그린다
+            InfoCard(CardUi(CardTone.NEUTRAL, u.consentTitle, null, emptyList())) {
+                u.consentLines.forEach { Text(it, style = TagoType.bodyS, color = c.text) }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                SectionTitle(u.ageTitle)
+                u.ageRows.forEach { row -> SegmentedControl(row, u.ageSel, actions.onStudyAge) }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                SectionTitle(u.yearsTitle)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Dim.gap)) {
+                    TagoButton("−", { actions.onStudyYears(-1) }, Modifier.width(120.dp), ButtonVariant.SECONDARY, ButtonSize.M)
+                    Text(u.yearsLabel, style = TagoType.titleS, color = c.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+                    TagoButton("+", { actions.onStudyYears(1) }, Modifier.width(120.dp), ButtonVariant.SECONDARY, ButtonSize.M)
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                SectionTitle(u.carTitle)
+                SegmentedControl(u.carItems, u.carSel, actions.onStudyCar)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                TagoButton(u.agreeLabel, actions.onStudyAgree, Modifier.weight(1.4f), ButtonVariant.PRIMARY, enabled = u.agreeEnabled)
+                TagoButton(u.declineLabel, actions.onStudyClose, Modifier.weight(1f), ButtonVariant.SECONDARY)
+            }
+        } else {
+            TagoButton(u.exportLabel, actions.onStudyExport, Modifier.fillMaxWidth(), ButtonVariant.SECONDARY, icon = R.drawable.ic_check, alignStart = true)
+            Column(verticalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                SectionTitle(u.uploadTitle)
+                SegmentedControl(u.uploadItems, u.uploadSel, actions.onStudyUpload)
+                Text(u.uploadNote, style = TagoType.bodyS, color = c.text2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                TagoButton(u.stopLabel, actions.onStudyStop, Modifier.weight(1f), ButtonVariant.SECONDARY)
+                TagoButton(u.closeLabel, actions.onStudyClose, Modifier.weight(1f), ButtonVariant.PRIMARY)
+            }
+        }
     }
 }
 
@@ -159,13 +237,56 @@ private fun ColumnScope.RoadContent(state: TagoUiState, p: Panel.RoadLink, actio
     Column(verticalArrangement = Arrangement.spacedBy(Dim.gap)) {
         InfoCard(CardUi(CardTone.NEUTRAL, null, null, emptyList())) {
             if (p.connecting != null) Text(p.connecting, style = TagoType.bodyM, color = c.text2)
-            if (p.strip != null) RoadStrip(p.strip, compact)
+            if (p.strip != null) RoadStrip(p.strip, compact || p.chargeLabel != null || !p.showButtons)   // 휴게소 정차·질문 중에는 짧은 축 — 신고 버튼·답 칩 자리
         }
         if (state.question != null) AnswerChips(state.question, actions.onAnswer)
         if (p.showButtons) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Dim.gapS)) {
             TagoButton(p.primaryLabel, actions.onRoadPrimary, Modifier.weight(1.4f), ButtonVariant.PRIMARY, icon = p.primaryIcon)
             TagoButton(p.endLabel, actions.onEndRoad, Modifier.weight(1f), ButtonVariant.SECONDARY)
         }
+        if (p.chargeLabel != null) TagoButton(p.chargeLabel, actions.onChargeOpen, Modifier.fillMaxWidth(), ButtonVariant.SECONDARY, icon = R.drawable.ic_flag, alignStart = true)
+    }
+}
+
+/** 충전기 고장 신고 1분 설문: 한 화면에 한 문항. 그림 타일(3D 렌더 그림, GPT Image 2.6 — 사용자: '3d 처럼', '현대 자동차 스타일로')을 누르면 다음 문항으로 — 사용자: "그림으로 표기", "한번에 다 띄우려고 하지마".
+ *  타일은 순정 설정 문법(흰 면·회색 선·직각), 그림은 색이 있어 고른 타일은 검정 굵은 테(3dp)로 표시. 기기 번호는 그림 없이 숫자만 크게(고르면 검정 면) */
+@Composable
+private fun ColumnScope.ChargeReportContent(u: ChargeReportUi, actions: TagoActions) {
+    val c = Tago.colors
+    Column(verticalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+        Text(u.progress, style = TagoType.bodyM, color = c.text2)
+        Text(u.question, style = TagoType.titleS, color = c.text)
+        u.tiles.chunked(u.columns).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+                row.forEach { tile -> SurveyTile(tile, tile.id == u.sel, Modifier.weight(1f)) { actions.onChargePick(tile.id) } }
+                repeat(u.columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(Dim.gapS)) {
+            if (u.backLabel != null) TagoButton(u.backLabel, actions.onChargeBack, Modifier.weight(1f), ButtonVariant.SECONDARY)
+            TagoButton(u.skipLabel, actions.onChargeSkip, Modifier.weight(1.4f), ButtonVariant.SECONDARY)
+            TagoButton(u.closeLabel, actions.onChargeClose, Modifier.weight(1f), ButtonVariant.SECONDARY)
+        }
+    }
+}
+
+@Composable
+private fun SurveyTile(t: SurveyTileUi, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = Tago.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Column(
+        modifier.then(if (t.icon != null) Modifier.padding(0.dp) else Modifier.height(96.dp)).border(if (on) 3.dp else Dim.line, if (on) c.ink else c.line)
+            .background(if (on && t.icon == null) c.ink else if (pressed) c.surfaceAlt else c.surface)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+    ) {
+        if (t.icon != null) {
+            // 그림은 타일 폭의 86 %(실측: 112dp 고정은 자리·고장 대수 그림의 강조가 안 보였다)
+            Image(painterResource(t.icon), null, Modifier.padding(top = 10.dp).fillMaxWidth(0.86f).aspectRatio(1f))
+            Spacer(Modifier.height(4.dp))
+            Text(t.label, style = TagoType.bodyM, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 12.dp))
+        } else Text(t.label, style = TagoType.titleS, color = if (on) c.onInk else c.text)
     }
 }
 

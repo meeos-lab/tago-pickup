@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-join.response",
+  "title": "POST /api/road/join 200 응답",
+  "type": "object",
+  "required": ["api", "me", "view"],
+  "properties": {
+    "api": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/api"},
+    "me": {"type": "string", "description": "차량 id(\"c\"+12 hex) — 본인만 아는 키"},
+    "view": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/view"}
+  }
+}

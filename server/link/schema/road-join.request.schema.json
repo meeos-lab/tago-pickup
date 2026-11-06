@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-join.request",
+  "title": "POST /api/road/join 요청",
+  "description": "도로 링크 참가. 필수 필드는 없다(이름·차 설명이 없으면 빈 글). kind \"ev\"(구급차 비컨)는 token 이 맞아야 하며 아니면 403. 글 길이는 허브가 자른다(이름 20자·차 40자·kind 12자) — 스키마는 그보다 넉넉한 상한만 둔다.",
+  "type": "object",
+  "properties": {
+    "t": {"type": "number", "minimum": 0},
+    "lang": {"type": ["string", "null"], "maxLength": 8, "description": "ko·en(그 밖은 ko)"},
+    "name": {"type": ["string", "null"], "maxLength": 200},
+    "car": {"type": ["string", "null"], "maxLength": 200},
+    "kind": {"type": ["string", "null"], "maxLength": 64, "description": "빈 값 = pleos 차, \"ev\" = 구급차 비컨"},
+    "token": {"type": ["string", "null"], "maxLength": 256},
+    "units": {"type": ["string", "null"], "maxLength": 8, "description": "거리 단위 km·mi(지역 프로필 server/regions/<id>.json units — 어바인만 mi). 그 밖·없음은 km. 영어 거리 글에만 쓴다(ADR-45)"}
+  }
+}

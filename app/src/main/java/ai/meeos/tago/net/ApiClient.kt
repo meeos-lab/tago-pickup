@@ -2,8 +2,6 @@ package ai.meeos.tago.net
 
 import android.os.Handler
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executor
 
 /**
@@ -25,16 +23,11 @@ class ApiClient(private val baseUrl: String, private val io: Executor, private v
     fun get(path: String, onError: (Throwable) -> Unit = {}, onOk: (JSONObject) -> Unit) = request("GET", path, null, onError, onOk)
 
     /** 동기 요청(io 스레드에서만 부를 것) */
-    fun http(method: String, path: String, body: String?): String {
-        val c = URL(baseUrl + path).openConnection() as HttpURLConnection
-        c.requestMethod = method
-        c.connectTimeout = 3000
-        c.readTimeout = 3000
-        if (body != null) {
-            c.doOutput = true
-            c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            c.outputStream.use { it.write(body.toByteArray()) }
-        }
-        return c.inputStream.bufferedReader().use { it.readText() }.also { c.disconnect() }
+    fun http(method: String, path: String, body: String?): String =
+        Http.text(baseUrl + path, method, body?.toByteArray(), if (body != null) JSON_HEADER else emptyMap(), connectMs = TIMEOUT_MS, readMs = TIMEOUT_MS)
+
+    private companion object {
+        const val TIMEOUT_MS = 3000   // 연결·읽기 각각(내장 서버는 같은 기기라 짧게)
+        val JSON_HEADER = mapOf("Content-Type" to "application/json; charset=utf-8")
     }
 }

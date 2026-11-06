@@ -15,9 +15,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * 차 안 마이크로 긴급차량 사이렌(웨일·옐프: 450~2000Hz에서 한 음이 몇 초씩 끊기지 않고 미끄러지듯 오르내림)을 찾는다.
- * 말소리(음절마다 끊김)·음악(음이 계단처럼 건너뜀)·차임(한 음 고정)은 거른다. 유럽식 2음(하이-로)은 대상이 아니다.
- * 규칙은 합성 시험 음원으로 맞춘 시연 규칙이다(실제 녹음 검증 전). 32ms 창·16ms 간격 FFT 512, CPU는 1% 안팎.
+ * (앱에서는 더 쓰지 않음 — 11-06 부터 SirenYamnet. tools/siren_eval 이 이 클래스를 떼어 가 11-05 평가를 재현한다)
+ * 차 안 마이크로 긴급차량 사이렌(웨일·옐프: 450~2000Hz에서 한 음이 몇 초씩 끊기지 않고 미끄러지듯 오르내림)을 찾는 FFT 규칙.
+ * 합성 시험 음원으로 맞췄고, 공개 실녹음 평가(11-05)에서 사이렌 없는 실제 도로 소음에도 48~95 % 시간 켜졌다. 32ms 창·16ms 간격 FFT 512.
  */
 class SirenDetector {
     companion object {
@@ -144,10 +144,11 @@ class SirenDetector {
 }
 
 /**
- * 마이크(또는 시험용 wav)를 읽어 SirenDetector에 넣는 스레드. 켜짐/꺼짐이 바뀔 때 onChange(on)을 부른다.
+ * 마이크(또는 시험용 wav)를 읽어 SirenYamnet 에 넣는 스레드. 켜짐/꺼짐이 바뀔 때 onChange(on)을 부른다.
  * 음성 인식(STT)이 마이크를 쓰는 동안은 stop()으로 놓아 준다(동시에 녹음하면 한쪽이 무음을 받는다).
+ * model: 스레드 안에서 부른다(4 MB 매핑을 화면 스레드에서 하지 않게). null 이면 감지하지 않는다.
  */
-class SirenMic(private val onChange: (Boolean) -> Unit, private val log: (String) -> Unit) {
+class SirenMic(private val model: () -> java.nio.ByteBuffer?, private val onChange: (Boolean) -> Unit, private val log: (String) -> Unit) {
     @Volatile private var running = false
     @Volatile private var gen = 0          // start 마다 하나씩: 멈춘 뒤 바로 다시 켜도 지난 스레드가 함께 돌지 않게
     private var thread: Thread? = null
@@ -160,13 +161,14 @@ class SirenMic(private val onChange: (Boolean) -> Unit, private val log: (String
         running = true
         val my = ++gen
         thread = Thread({
-            val det = SirenDetector()
+            var det: SirenYamnet? = null
             var last = false
-            val buf = DoubleArray(SirenDetector.N)
             val hop = ShortArray(SirenDetector.HOP)
             var rec: AudioRecord? = null
             var file: RandomAccessFile? = null
             try {
+                det = model()?.let { SirenYamnet(it) }
+                if (det == null) { log("사이렌 감지: 모델(${SirenYamnet.ASSET}) 없음 — 끔"); return@Thread }
                 if (wav != null) { file = RandomAccessFile(wav, "r"); file.seek(44) }
                 else {
                     val min = AudioRecord.getMinBufferSize(SirenDetector.SR, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -192,15 +194,14 @@ class SirenMic(private val onChange: (Boolean) -> Unit, private val log: (String
                         Thread.sleep(200); continue
                     }
                     errors = 0
-                    System.arraycopy(buf, SirenDetector.HOP, buf, 0, SirenDetector.N - SirenDetector.HOP)
-                    for (i in 0 until SirenDetector.HOP) buf[SirenDetector.N - SirenDetector.HOP + i] = hop[i] / 32768.0
-                    val on = det.frame(buf)
-                    if (on != last) { last = on; onChange(on) }
+                    val on = det.push(hop, n)
+                    if (on != last) { last = on; onChange(on); log("사이렌 감지: ${if (on) "켬" else "끔"}(점수 %.2f)".format(det.score)) }
                 }
             } catch (e: Exception) {
                 log("사이렌 감지 오류: ${e.message}")
             } finally {
                 runCatching { rec?.stop() }; runCatching { rec?.release() }; runCatching { file?.close() }
+                det?.let { if (it.runs > 0) log("사이렌 감지: 추론 ${it.runs}회, 평균 %.1f ms".format(it.nanos / 1e6 / it.runs)); it.close() }
                 if (last) onChange(false)
                 if (my == gen) running = false
             }

@@ -2,7 +2,6 @@ package ai.meeos.tago.engine
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -29,7 +28,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     class Cand(
         val id: String, val name: String, val icon: String, val kind: String, val covered: Boolean,
         val lat: Double, val lon: Double, val curb: JSONArray, val road: String, val onRoute: Boolean,
-        val s: Double, val off: Double, val blocked: List<String>, val poi: P, val fine: Int, val cctv: Int?,
+        val s: Double, val off: Double, val blocked: List<String>, val poi: P, val fine: Int,
         val curbXy: P, val cams: List<Pair<Int, Int>>,   // 100m 안 단속 CCTV (거리 m, cctvRaw 인덱스), 가까운 순
         val pickup: List<String>,                          // 주차만 금지(잠깐 태우기는 됨)인 규칙에 걸린 사유
         val safe: Int, val toilet: Double?,                // 반경 30m 방범 시설 수, 가장 가까운 화장실까지(m)
@@ -43,10 +42,10 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
 
     private class Rule(val layer: String, val radius: Double, val reason: String, val ban: String)
 
-    private val NEARBY_KINDS = mapOf("parking" to "parking", "toilet" to "toilet", "drivethru" to "drivethru", "takeout" to "takeout")
+    private val NEARBY_KINDS = setOf("parking", "toilet", "drivethru", "takeout")   // 근처 장소 종류(소속 검사만 한다)
     // 가는 길 포장 주문(서버 TAKEOUT_PREP·TAKEOUT_STOP과 같음)
     private val TAKEOUT_PREP = mapOf("cafe" to 300, "fast_food" to 420, "convenience" to 60)
-    private val TAKEOUT_STOP = 90.0   // 근처 장소 종류
+    private val TAKEOUT_STOP = 90.0   // 매장 앞에 세우고 받아 오는 시간(초)
 
     companion object {
         const val CAR_CRUISE = 8.3                                  // m/s, 정차 중 ETA 계산용(30km/h)
@@ -54,9 +53,13 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         const val MAX_SESSIONS = 100   // 세션 저장 상한 — 넘치면 끝난·오래 조용한 세션부터, 없을 때만 가장 오래된 것부터 지운다(무제한 생성으로 메모리를 채우지 못하게)
         const val IDLE_EVICT_SEC = 30 * 60.0   // 이만큼 조회·조작이 없으면 '오래 조용한' 세션(서버 IDLE_EVICT_SEC 와 같다)
         const val MSG_MAX = 80                 // 기다리는 사람 메시지 길이 상한(코드 포인트, 서버 MSG_MAX 와 같다)
-        private val MSG_CTRL = Regex("""[\u0000-\u001f\u007f-\u009f\u2028\u2029]""")              // \uc6d0\uc2dc \ubb38\uc790\uc5f4: \u \ub294 \uc815\uaddc\uc2dd\uc774 \ud47c\ub2e4
+        private val MSG_CTRL = Regex("""[\u0000-\u001f\u007f-\u009f\u2028\u2029]""")              // 원시 문자열: \u 는 정규식이 푼다
         private val MSG_INVIS = Regex("""[\u200b\u200c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]""")
         private val MSG_SPACES = Regex(" {2,}")
+        private val HHMM = Regex("[0-9]{2}:[0-9]{2}")                                      // 시연 시각 형식(서버 HHMM 과 같다)
+        /** "hh:mm"(00:00–23:59)인지 — 세션 생성·시각 바꾸기 공용(서버 valid_clock 과 같다) */
+        private fun validClock(hhmm: String) = HHMM.matches(hhmm) && hhmm.substring(0, 2).toInt() < 24 && hhmm.substring(3, 5).toInt() < 60
+        private val RIDER_DELAY = Regex("""([0-9]+) *분만|give me ([0-9]+) min""", RegexOption.IGNORE_CASE)   // "2분만" → 늦게 나온다
 
         /** 차에서 소리 내어 읽는 메시지: 제어 문자·줄바꿈은 빈칸으로, 보이지 않는 방향·폭 없는 문자는 빼고 80자까지 (서버 clean_message 와 같다) */
         fun cleanMessage(raw: String): String {
@@ -73,6 +76,35 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         const val CAM_STOP = 240                             // 운영 중인 카메라 앞: 5분 단속 전 1분 여유
         const val CAR_HALF = 2.5
         const val SEARCH_RADIUS = 450.0
+        // 후보·평가 규칙의 고정값(서버 meeos_server.py 의 같은 이름과 같은 값 — tools/check_engine_consts.py 가 대조한다)
+        const val CURB_MAX_D = 40.0                  // POI 에서 가장 가까운 도로가 이보다 멀면 후보에서 뺀다(m)
+        const val CURB_SHIFT_MAIN = 9.0              // 길가 정차점: 경로 도로에서 POI 쪽으로 옮기는 거리(m)
+        const val CURB_SHIFT_SIDE = 3.0              //   골목
+        const val RULE_CAR_HALF_BELOW = 100.0        // 반경이 이보다 작은 규칙에만 차 길이 절반을 더한다(m)
+        const val SIGNAL_ON_ROUTE = 30.0             // 경로에서 이 안의 신호를 경로 위 신호로 본다(m)
+        const val SIDE_SPEED = 5.6                   // 이면도로·못 갈 때 직선 속도(m/s)
+        const val PASSED_BACK = 120.0                // 지나친 곳으로 되돌아오는 거리(m)
+        const val TURN_RIGHT_WAIT = 20               // 회전 신호 대기(초): 우회전
+        const val TURN_LEFT_WAIT = 45                //   좌회전
+        val CAM_HOURS_ARTERIAL = 7.0 to 22.0         // 주정차 단속 CCTV 운영 시간(시): 간선
+        val CAM_HOURS_SIDE = 8.0 to 22.0             //   이면
+        const val SCHOOL_FINE = 12                   // 어린이 보호구역 과태료(만원) — 가중 시간 밖에는 SCHOOL_FINE_OFF(대치동 값)
+        val SCHOOL_FINE_HOURS = 8.0 to 20.0
+        const val SCHOOL_FINE_OFF = 4
+        const val CROSS_NEAR = 200.0                 // 큰길을 건너는지 보는 폭(m)
+        const val NIGHT_SAFE_PTS = 5                 // 밤 방범 시설 가점: 개당
+        const val NIGHT_SAFE_MAX = 3                 //   최대 개수
+        const val RAIN_WALK = 1.5                    // 비 올 때 걷기 가중
+        const val MISMATCH_W = 0.5                   // 비용: 서로 기다림 가중
+        const val COVERED_BONUS = 30                 //   지붕 있는 곳 가점(초)
+        const val OVER_W = 2.0                       //   정차 한도 초과 가중
+        const val SENIOR_NEAR_M = 40.0               // 어르신이 '거의 걷지 않는' 거리(m)
+        const val WALK_ONE_MIN_S = 45                // '도보 1분 이내'(초)
+        const val NEARBY_TOP = 3                     // 근처 장소·포장 매장 개수
+        const val DEFAULT_HHMM = "22:00"             // 시연 시계 기본 시각
+        const val ARRIVE_M = 30.0                    // 확정 지점 이 거리 안·
+        const val ARRIVE_MS = 0.5                    //   이 속도 아래면 도착
+        const val PLACE_NEAR_M = 150.0               // 차 위치를 'OO 근처'로 부르는 거리(m)
     }
 
     private fun objMap(o: JSONObject?): Map<String, JSONObject> = o?.keys()?.asSequence()?.associateWith { o.getJSONObject(it) } ?: emptyMap()
@@ -109,6 +141,8 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     fun xy(lat: Double, lon: Double) = P((lon - lon0) * kx, (lat - lat0) * 110540.0)
     fun latlon(p: P) = doubleArrayOf(lat0 + p.y / 110540.0, lon0 + p.x / kx)
     private fun dist(a: P, b: P) = hypot(a.x - b.x, a.y - b.y)
+    /** JSON 숫자(불리언·글 아님)이고 유한하면 Double, 아니면 null — 입력 검사용(서버 finite_num 과 같다) */
+    private fun finiteNum(v: Any?): Double? = (v as? Number)?.toDouble()?.takeIf { it.isFinite() }
 
     private fun pts(key: String): List<P> {
         val a = map.optJSONArray(key) ?: return emptyList()
@@ -152,7 +186,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         return route.last()
     }
 
-    private val signalS = layers.getValue("signals").map { project(it) }.filter { abs(it.second) < 30 }.map { it.first }.sorted()
+    private val signalS = layers.getValue("signals").map { project(it) }.filter { abs(it.second) < SIGNAL_ON_ROUTE }.map { it.first }.sorted()
     private val roads: List<Pair<String, List<P>>> = map.getJSONArray("roads").let { a ->
         (0 until a.length()).map { i ->
             val r = a.getJSONObject(i); val c = r.getJSONArray("coords")
@@ -190,7 +224,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         val rs = map.getJSONArray("roads")
         for (i in 0 until rs.length()) {
             val r = rs.getJSONObject(i)
-            val ow = r.optString("oneway"); val v = ROAD_SPEED[r.getString("highway")] ?: 5.6
+            val ow = r.optString("oneway"); val v = ROAD_SPEED[r.getString("highway")] ?: SIDE_SPEED
             val cs = r.getJSONArray("coords")
             val ids = (0 until cs.length()).map { j -> cs.getJSONArray(j).let { node(it.getDouble(0), it.getDouble(1)) } }
             for (k in 0 until ids.size - 1) {
@@ -257,7 +291,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     private fun reach(dd: DoubleArray, prev: IntArray, p0: P, p1: P, sn0: Snap, sn1: Snap, drive: Boolean): Reach {
         val (cost, end0) = arrive(dd, sn0, sn1, drive)
         if (cost == Double.POSITIVE_INFINITY) {
-            val l = dist(p0, p1); return Reach(if (drive) l / 5.6 else l, l, listOf(p0, p1))
+            val l = dist(p0, p1); return Reach(if (drive) l / SIDE_SPEED else l, l, listOf(p0, p1))
         }
         val ns = ArrayList<Int>(); var end = end0
         while (end >= 0) { ns.add(end); end = prev[end] }
@@ -305,8 +339,8 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
             val c = a.getJSONObject(i)
             val p = xy(c.getDouble("lat"), c.getDouble("lon"))
             val (d, q, road) = nearestRoad(p)
-            if (q == null || d > 40) return@mapNotNull null
-            val k = min(d, if (road == routeName) 9.0 else 3.0) / (if (d == 0.0) 1.0 else d)
+            if (q == null || d > CURB_MAX_D) return@mapNotNull null
+            val k = min(d, if (road == routeName) CURB_SHIFT_MAIN else CURB_SHIFT_SIDE) / (if (d == 0.0) 1.0 else d)
             val curb = if (d > 0) P(q.x + (p.x - q.x) * k, q.y + (p.y - q.y) * k) else q
             val (s, off) = project(curb)
             val blocked = mutableListOf<String>()
@@ -314,14 +348,13 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
             var fine = 0
             for (r in rules) {
                 val near = layers.getValue(r.layer).minOfOrNull { dist(curb, it) } ?: 1e9
-                if (near <= r.radius + (if (r.radius < 100) CAR_HALF else 0.0)) {
+                if (near <= r.radius + (if (r.radius < RULE_CAR_HALF_BELOW) CAR_HALF else 0.0)) {
                     if (r.ban == "stop") {
-                        blocked += "${r.reason} (${Math.floor(near + 0.5).toInt()}m)"
+                        blocked += "${r.reason} (${rnd(near)}m)"
                         fine = max(fine, FINE.getValue(r.layer))
-                    } else pickup += "${r.reason} (${Math.floor(near + 0.5).toInt()}m)"
+                    } else pickup += "${r.reason} (${rnd(near)}m)"
                 }
             }
-            val cam = cctv.minOfOrNull { dist(curb, it) }?.roundToInt()
             val camsNear = cctv.mapIndexedNotNull { j, o -> dist(curb, o).takeIf { it <= CAM_RANGE }?.let { it.roundToInt() to j } }
                 .sortedWith(compareBy({ it.first }, { it.second }))
             if (routeCurbBan != null && road == routeName) blocked += routeCurbBan
@@ -330,7 +363,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
             Cand(
                 "c$i", c.getString("name"), c.getString("icon"), c.getString("kind"), c.optBoolean("covered"),
                 c.getDouble("lat"), c.getDouble("lon"), JSONArray().put(ll[0]).put(ll[1]), road?.ifEmpty { L("골목", "side street") } ?: L("골목", "side street"),
-                road == routeName, r1(s), r1(off), blocked, p, fine, cam, curb, camsNear, pickup,
+                road == routeName, r1(s), r1(off), blocked, p, fine, curb, camsNear, pickup,
                 safety.count { dist(p, it) <= SAFE_RANGE }, toilets.minOfOrNull { dist(p, xy(it.getDouble("lat"), it.getDouble("lon"))) },
                 snap(p), snap(curb),
             )
@@ -338,6 +371,8 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     }
 
     private fun r1(v: Double) = Math.round(v * 10) / 10.0
+    /** 정수 반올림(서버 rnd 와 같은 0.5 올림) — Math.floor(x + 0.5).toInt() 를 한 이름으로 */
+    private fun rnd(x: Double) = Math.floor(x + 0.5).toInt()
     private fun josa(word: String, withFinal: String, without: String): String {
         val last = word.lastOrNull() ?: return without
         return if (last in '가'..'힣' && (last - '가') % 28 != 0) withFinal else without
@@ -366,7 +401,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
 
     private fun evalKey(s: JSONObject): String {
         val r = s.getJSONObject("rider"); val car = s.getJSONObject("car")
-        return listOf(r.opt("lat"), r.opt("lon"), Math.round(carS(s) * 10), car.optString("gear"), Math.round(car.optDouble("speed", 0.0) * 100),
+        return listOf(r.opt("lat"), r.opt("lon"), carS(s), car.optString("gear"), car.optDouble("speed", 0.0), s.optBoolean("needToilet"),   // 반올림하지 않는다: 반올림 칸 안의 변화로 옛 제안이 남으면 캐시 없는 PC 서버와 갈린다
             car.optString("wiper"), s.optJSONObject("clock")?.toString(), s.getJSONObject("member").optString("type"), s.getJSONObject("member").optString("name"),
             s.optJSONArray("passed")?.toString()).joinToString("|")
     }
@@ -389,15 +424,15 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                 val uturn = (nxt - cs) / v + UTURN_PENALTY + (nxt - c.s) / v
                 return if (loop <= uturn) CarT(loop, false, L("블록을 돌아 반대편 정차(유턴 없음)", "Go around the block to the far side (no U-turn)")) else CarT(uturn, true, L("신호 교차로에서 유턴", "U-turn at the signal"))
             }
-            return CarT((-ahead + 120) / v + UTURN_PENALTY * 2, true, L("지나쳐서 되돌아와야 함", "Passed it — must come back around"))
+            return CarT((-ahead + PASSED_BACK) / v + UTURN_PENALTY * 2, true, L("지나쳐서 되돌아와야 함", "Passed it — must come back around"))
         }
-        val turn = if (right) 20 else 45
+        val turn = if (right) TURN_RIGHT_WAIT else TURN_LEFT_WAIT
         if (ahead >= 0) return CarT(ahead / v + abs(c.off) / v + turn, false, if (right) L("우회전 후 골목 정차", "Turn right into the side street") else L("좌회전 후 골목 정차", "Turn left into the side street"))
-        return CarT((-ahead + 120) / v + abs(c.off) / v + UTURN_PENALTY, true, L("지나쳐서 되돌아와야 함", "Passed it — must come back around"))
+        return CarT((-ahead + PASSED_BACK) / v + abs(c.off) / v + UTURN_PENALTY, true, L("지나쳐서 되돌아와야 함", "Passed it — must come back around"))
     }
 
     private fun clock(sess: JSONObject): Pair<Double, Boolean> {
-        val c = sess.optJSONObject("clock") ?: JSONObject().put("hhmm", "22:00").put("weekday", true)
+        val c = sess.optJSONObject("clock") ?: JSONObject().put("hhmm", DEFAULT_HHMM).put("weekday", true)
         val (h, m) = c.getString("hhmm").split(":").map { it.toInt() }
         return h + m / 60.0 to c.optBoolean("weekday", true)
     }
@@ -407,7 +442,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     /** 강남구 고정형 CCTV 운영 시간: 간선 07–22시, 이면 08–22시, 심야 운영 카메라는 종일[추정], 주말은 토·공휴일 운영 카메라만 */
     private fun camActive(cam: JSONObject, h: Double, weekday: Boolean): Boolean {
         if (!weekday && !cam.optBoolean("weekend")) return false
-        return cam.optBoolean("night") || inHours(h, if (cam.optBoolean("arterial")) listOf(7.0 to 22.0) else listOf(8.0 to 22.0))
+        return cam.optBoolean("night") || inHours(h, if (cam.optBoolean("arterial")) listOf(CAM_HOURS_ARTERIAL) else listOf(CAM_HOURS_SIDE))
     }
 
     private fun stopLimit(sess: JSONObject, c: Cand): Pair<Int, String> {
@@ -436,20 +471,21 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         val (hour, weekday) = clock(sess)
         val scored = mutableListOf<JSONObject>()
         val excluded = mutableListOf<JSONObject>()
+        val passed = passedIds(sess); val cs0 = carS(sess)   // 평가 중 세션은 바뀌지 않는다 — 후보마다 다시 만들지 않는다
         for (c in cands) {
             val straight = dist(rp, c.poi)
             if (straight > SEARCH_RADIUS) continue
-            if (passedIds(sess).contains(c.id)) { excluded += exObj(c, straight, L("방금 서지 못하고 지나침", "Just drove past it — couldn't stop")); continue }
+            if (passed.contains(c.id)) { excluded += exObj(c, straight, L("방금 서지 못하고 지나침", "Just drove past it — couldn't stop")); continue }
             // 한 번 지나친 뒤에는 차보다 앞에 있는 곳만 고른다(되돌아가려면 블록을 돌아야 하고, 그사이 또 막힐 수 있다)
-            if (passedIds(sess).isNotEmpty() && c.s < carS(sess)) { excluded += exObj(c, straight, L("이미 지나온 곳", "Already behind the car")); continue }
+            if (passed.isNotEmpty() && c.s < cs0) { excluded += exObj(c, straight, L("이미 지나온 곳", "Already behind the car")); continue }
             if (c.blocked.isNotEmpty()) {
-                excluded += exObj(c, straight, c.blocked[0], if (c.fine != 12 || inHours(hour, listOf(8.0 to 20.0))) c.fine else 4)
+                excluded += exObj(c, straight, c.blocked[0], if (c.fine != SCHOOL_FINE || inHours(hour, listOf(SCHOOL_FINE_HOURS))) c.fine else SCHOOL_FINE_OFF)
                 continue
             }
             val lane = BUS_LANES[c.road]
             if (lane != null && weekday && inHours(hour, lane.second)) { excluded += exObj(c, straight, lane.first, 4); continue }
-            var crossing = c.onRoute && abs(rOff) < 200 && (rOff > 0) != (c.off > 0)
-            crossing = crossing || (!c.onRoute && abs(rOff) < 200 && abs(c.off) < 200 && (rOff > 0) != (c.off > 0))
+            var crossing = c.onRoute && abs(rOff) < CROSS_NEAR && (rOff > 0) != (c.off > 0)
+            crossing = crossing || (!c.onRoute && abs(rOff) < CROSS_NEAR && abs(c.off) < CROSS_NEAR && (rOff > 0) != (c.off > 0))
             if (crossing && kind in setOf("child", "senior")) {
                 excluded += exObj(c, straight, L("${if (kind == "child") "아이가" else "어르신이"} 큰길($routeName)을 건너야 함",
                     "${if (kind == "child") "Child" else "Senior"} would have to cross $routeName")); continue
@@ -464,9 +500,9 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                     if (c.toilet != null && c.toilet <= TOILET_RANGE) { bonus += TOILET_BONUS; why = L("화장실에 들르기 좋은", "next to a restroom") }
                     else if (c.kind in RESTROOM_KINDS) { bonus += TOILET_BONUS; why = L("화장실을 쓸 수 있는", "with a customer restroom") }
                 }
-                if (inHours(hour, NIGHT)) bonus += 5 * min(c.safe, 3)   // 밤에는 방범 시설 있는 곳을 조금 더
+                if (inHours(hour, NIGHT)) bonus += NIGHT_SAFE_PTS * min(c.safe, NIGHT_SAFE_MAX)   // 밤에는 방범 시설 있는 곳을 조금 더
                 val ct = carTime(sess, c)
-                val w = WALK_WEIGHT.getValue(kind) * (if (raining) 1.5 else 1.0)
+                val w = WALK_WEIGHT.getValue(kind) * (if (raining) RAIN_WALK else 1.0)
                 val carWait = max(0.0, walk - ct.sec)
                 val (limit, limitWhy) = stopLimit(sess, c)
                 if (carWait > STOP_LIMIT) {
@@ -474,7 +510,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                         "Car would wait over ${(carWait / 60).roundToInt()} min — that counts as parking"), FINE["busStops"] ?: 0)
                 } else {
                     val over = max(0.0, carWait - limit)
-                    val cost = ct.sec + w * walk + 0.5 * abs(ct.sec - walk) - (if (raining && c.covered) 30 else 0) - bonus + 2.0 * over
+                    val cost = ct.sec + w * walk + MISMATCH_W * abs(ct.sec - walk) - (if (raining && c.covered) COVERED_BONUS else 0) - bonus + OVER_W * over
                     scored += JSONObject().put("id", c.id).put("name", c.name).put("icon", c.icon).put("curb", c.curb).put("road", c.road)
                         .put("cost", cost.roundToInt()).put("carSec", ct.sec.roundToInt()).put("walkSec", walk.roundToInt())
                         .put("uturn", ct.uturn).put("crossing", crossing).put("route", ct.how).put("covered", c.covered).put("s", c.s)
@@ -496,7 +532,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         val name = sess.getJSONObject("member").getString("name")
         val kind = sess.getJSONObject("member").getString("type")
         val parts = mutableListOf<String>()
-        val banned = excluded.filter { "금지" in it.getString("reason") || "밀집" in it.getString("reason") }
+        val banned = excluded.filter { e -> cand(e.getString("id"))?.blocked?.firstOrNull() == e.getString("reason") }   // 정차 금지 규칙(blocked)으로 뺀 곳만 센다(서버와 같다) — 문구로 세면 어바인 소화전(§22514)처럼 금지 문구가 없는 규칙을 놓친다
         var lead = ""
         val words = linkedMapOf("소화전" to "소화전과", "횡단보도" to "횡단보도와", "버스정류장" to "버스정류장과", "교차로" to "교차로와")
         val legal = banned.filter { e -> e.getInt("dist") in 20 until 150 && words.keys.any { e.getString("reason").startsWith(it) } }
@@ -513,16 +549,16 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         val closest = scored.minBy { it.getInt("walkSec") }
         val saved = closest.getInt("carSec") - best.getInt("carSec")
         val route = best.getString("route")
-        if (kind == "senior" && walkM < 40) parts += "$who 거의 걷지 않도록 차가 ${if ("블록" in route) "블록을 돌아 " else ""}바로 앞에 서는"
+        if (kind == "senior" && walkM < SENIOR_NEAR_M) parts += "$who 거의 걷지 않도록 차가 ${if ("블록" in route) "블록을 돌아 " else ""}바로 앞에 서는"
         else if (kind in setOf("child", "senior") && !best.getBoolean("crossing")) parts += "$who 큰길을 건너지 않는"
         else if (best.getBoolean("crossing")) parts += "$who 횡단보도로 건너오는"
         if (raining && best.getBoolean("covered")) parts += "비를 피할 수 있는"
         val prefer = best.optString("prefer")
-        if (prefer.isNotEmpty() && !(kind == "senior" && walkM < 40)) parts += prefer
+        if (prefer.isNotEmpty() && !(kind == "senior" && walkM < SENIOR_NEAR_M)) parts += prefer
         if (sess.optBoolean("needToilet") && prefer in setOf("화장실에 들르기 좋은", "화장실을 쓸 수 있는")) { parts.remove(prefer); parts.add(0, prefer) }
         if (kind == "adult" && best !== closest && saved >= 20) parts.add(0, "조금 걷지만 차가 ${if (saved >= 60) "${(saved / 60.0).roundToInt()}분" else "${saved}초"} 빨리 도착하는")
         if (!best.getBoolean("uturn") && "블록" !in route) parts += "유턴 없이 가는"
-        val walkTxt = if (best.getInt("walkSec") < 45) "도보 1분 이내" else "도보 ${(best.getInt("walkSec") / 60.0).roundToInt()}분"
+        val walkTxt = if (best.getInt("walkSec") < WALK_ONE_MIN_S) "도보 1분 이내" else "도보 ${(best.getInt("walkSec") / 60.0).roundToInt()}분"
         excluded.firstOrNull { "버스전용차로" in it.getString("reason") }?.let { lead += "버스전용차로 운영 시간이라 ${it.getString("name")} 쪽 큰길은 제외했습니다. " }
         val tail = when {
             best.getInt("stopLimit") == PEAK_STOP && kind != "senior" -> " 하원 단속 시간이라 ${name}에게 1분 먼저 나오도록 알립니다."
@@ -534,30 +570,30 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
             "$name${josa(name, "이는", "는")} $walkTxt, 차량은 ${max(1, (best.getInt("carSec") / 60.0).roundToInt())}분 후 도착합니다.$tail"
         val hook = if (banned.isNotEmpty()) "정차 금지 ${banned.size}곳 제외. " else ""
         var key = parts.firstOrNull() ?: ""
-        if (kind == "senior" && walkM < 40) key = "$who 거의 걷지 않는"
+        if (kind == "senior" && walkM < SENIOR_NEAR_M) key = "$who 거의 걷지 않는"
         val speech = "$hook${if (key.isNotEmpty()) "$key " else ""}$bn 앞을 제안합니다."
         return screen to speech
     }
 
-    private fun minsEn(sec: Int) = if (sec < 45) "under a minute" else "${(sec / 60.0).roundToInt()} min"
+    private fun minsEn(sec: Int) = if (sec < WALK_ONE_MIN_S) "under a minute" else "${(sec / 60.0).roundToInt()} min"
 
     /** 영어 설명문 (explain()과 같은 판단, Python explain_en과 같은 문장) */
     private fun explainEn(sess: JSONObject, best: JSONObject, excluded: List<JSONObject>, raining: Boolean, scored: List<JSONObject>): Pair<String, String> {
         val name = sess.getJSONObject("member").getString("name")
         val kind = sess.getJSONObject("member").getString("type")
-        val banned = excluded.filter { val r = it.getString("reason"); "no stopping" in r || "Main road" in r || "School" in r }
+        val banned = excluded.filter { e -> cand(e.getString("id"))?.blocked?.firstOrNull() == e.getString("reason") }   // 정차 금지 규칙(blocked)으로 뺀 곳만 센다(서버와 같다) — 문구로 세면 어바인 소화전(§22514)처럼 금지 문구가 없는 규칙을 놓친다
         val spots = "${banned.size} no-stopping spot${if (banned.size != 1) "s" else ""}"
         val lead = if (banned.isNotEmpty()) "Skipped $spots. " else ""
         val parts = mutableListOf<String>()
         val walkM = best.getInt("walkSec") * WALK_SPEED.getValue(kind)
         val closest = scored.minBy { it.getInt("walkSec") }
         val saved = closest.getInt("carSec") - best.getInt("carSec")
-        if (kind == "senior" && walkM < 40) parts += "$name barely has to walk"
+        if (kind == "senior" && walkM < SENIOR_NEAR_M) parts += "$name barely has to walk"
         else if (kind in setOf("child", "senior") && !best.getBoolean("crossing")) parts += "$name doesn't cross $routeName"
         else if (best.getBoolean("crossing")) parts += "$name crosses at the crosswalk"
         if (raining && best.getBoolean("covered")) parts += "out of the rain"
         val prefer = best.optString("prefer")
-        if (prefer.isNotEmpty() && !(kind == "senior" && walkM < 40)) parts += prefer
+        if (prefer.isNotEmpty() && !(kind == "senior" && walkM < SENIOR_NEAR_M)) parts += prefer
         if (sess.optBoolean("needToilet") && prefer in setOf("next to a restroom", "with a customer restroom")) { parts.remove(prefer); parts.add(0, prefer) }
         if (kind == "adult" && best !== closest && saved >= 20) parts.add(0, "a short walk saves the car ${minsEn(saved)}")
         if (!best.getBoolean("uturn") && "block" !in best.getString("route")) parts += "no U-turn"
@@ -618,7 +654,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
             s.put("leaveNow", true)
             logEvent(s, L("${s.getJSONObject("member").getString("name")}에게 '지금 나오세요' 알림", "Told ${s.getJSONObject("member").getString("name")} to head out now"))
         }
-        if (status == "confirmed" && abs(carS(s) - c.s) < 30 && s.getJSONObject("car").getDouble("speed") < 0.5) {
+        if (status == "confirmed" && abs(carS(s) - c.s) < ARRIVE_M && s.getJSONObject("car").getDouble("speed") < ARRIVE_MS) {
             s.put("status", "arrived")
             logEvent(s, L("차가 ${c.name} 앞에 도착", "Car arrived at ${c.name}"))
         }
@@ -654,8 +690,8 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         out.put("carPos", JSONObject().put("lat", ll[0]).put("lon", ll[1]).put("s", cs).put("heading", Math.toDegrees(atan2(a.x - b.x, a.y - b.y))))
         out.put("maxProgress", routeLen - s.getJSONObject("scenario").getDouble("carStartS"))
         val cp = pointAt(cs)
-        val near = cands.minBy { hypot(it.curbXy.x - cp.x, it.curbXy.y - cp.y) }
-        out.put("carPlace", if (hypot(near.curbXy.x - cp.x, near.curbXy.y - cp.y) < 150) L("$routeName ${near.name} 근처", "$routeName near ${near.name}")
+        val near = cands.minBy { dist(it.curbXy, cp) }
+        out.put("carPlace", if (dist(near.curbXy, cp) < PLACE_NEAR_M) L("$routeName ${near.name} 근처", "$routeName near ${near.name}")
             else L("$routeName (대치동)", "$routeName, ${profile.getString("area")}"))
         out.put("region", regionInfo())
         val conf = confirmedId(s)?.let { cand(it) }
@@ -708,7 +744,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
             .put("name", rawMember.optString("name").take(20).ifEmpty { profile.getJSONObject("member").getString("name") })
             .put("type", rawMember.optString("type").takeIf { it in WALK_SPEED.keys } ?: profile.getJSONObject("member").getString("type"))
         val rawClock = body.optJSONObject("clock")
-        val clock = JSONObject().put("hhmm", rawClock?.optString("hhmm")?.takeIf { Regex("\\d{2}:\\d{2}").matches(it) } ?: "22:00").put("weekday", rawClock?.optBoolean("weekday", true) ?: true)
+        val clock = JSONObject().put("hhmm", rawClock?.optString("hhmm")?.takeIf { validClock(it) } ?: DEFAULT_HHMM).put("weekday", rawClock?.optBoolean("weekday", true) ?: true)
         // 세션은 100개까지만 둔다(시연 세션은 몇 개면 된다) — 넘치면 끝난·조용한 세션부터 캐시와 함께 지운다(evictOne)
         while (sessions.size >= MAX_SESSIONS) evictOne()
         // 세션 id 는 링크(/m/<id>)의 열쇠다 — 짐작할 수 없게 64비트 난수(16자리 16진수). PC 서버(meeos_server.py)와 같은 길이
@@ -753,7 +789,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     @Synchronized
     fun nearby(sid: String, kind: String, from: String? = null): JSONObject? {
         val s = sessions[sid] ?: return null
-        if (kind !in NEARBY_KINDS) return null
+        if (kind !in NEARBY_KINDS) throw org.json.JSONException("unknown kind")   // 서버와 같은 400(전에는 404)
         touch(sid)
         val conf = confirmedId(s)?.let { cand(it) }
         val bestId = s.optJSONObject("proposal")?.optJSONObject("best")?.optString("id")?.takeIf { cand(it) != null }
@@ -775,9 +811,9 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         val (h, weekday) = clock(s)
         val items = JSONArray()
         when {
-            kind == "toilet" -> toilets.indices.map { i -> net(toiletSn[i].first, toiletSn[i].second).len to toilets[i] }.sortedBy { it.first }.take(3).forEach { (len, t) ->
+            kind == "toilet" -> toilets.indices.map { i -> net(toiletSn[i].first, toiletSn[i].second).len to toilets[i] }.sortedBy { it.first }.take(NEARBY_TOP).forEach { (len, t) ->
                 items.put(JSONObject().put("name", t.getString("name")).put("lat", t.getDouble("lat")).put("lon", t.getDouble("lon"))
-                    .put("curb", JSONArray().put(t.getDouble("lat")).put(t.getDouble("lon"))).put("dist", Math.floor(len + 0.5).toInt())
+                    .put("curb", JSONArray().put(t.getDouble("lat")).put(t.getDouble("lon"))).put("dist", rnd(len))
                     .put("inside", t.optBoolean("inside")).put("hours", t.optString("hours")).put("exit", t.optString("exit")).put("detail", t.optString("detail")))
             }
             kind == "takeout" -> {
@@ -801,22 +837,22 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                         val extra = max(0.0, toStore + TAKEOUT_STOP + toTarget - direct)
                         val wait = max(0.0, TAKEOUT_PREP.getValue(c.kind) - toStore)
                         val late = max(0.0, extra + wait - slack)
-                        opts += Opt(Math.floor(late + 0.5).toInt(), Math.floor(extra + 0.5).toInt(), c, toStore, wait)
+                        opts += Opt(rnd(late), rnd(extra), c, toStore, wait)
                     }
-                    opts.sortedWith(compareBy({ it.late }, { it.extra }, { it.c.id })).take(3).forEach { o ->
+                    opts.sortedWith(compareBy({ it.late }, { it.extra }, { it.c.id })).take(NEARBY_TOP).forEach { o ->
                         items.put(JSONObject().put("id", o.c.id).put("name", o.c.name).put("kind", o.c.kind).put("lat", o.c.lat).put("lon", o.c.lon).put("curb", o.c.curb)
-                            .put("dist", Math.floor(reach(cd, cp, car, o.c.curbXy, carSn, o.c.dsnap, true).len + 0.5).toInt()).put("extraSec", o.extra).put("lateSec", o.late)
-                            .put("slackSec", Math.floor(slack + 0.5).toInt()).put("carToStoreSec", Math.floor(o.toStore + 0.5).toInt())
-                            .put("prepSec", TAKEOUT_PREP.getValue(o.c.kind)).put("waitSec", Math.floor(o.wait + 0.5).toInt()))
+                            .put("dist", rnd(reach(cd, cp, car, o.c.curbXy, carSn, o.c.dsnap, true).len)).put("extraSec", o.extra).put("lateSec", o.late)
+                            .put("slackSec", rnd(slack)).put("carToStoreSec", rnd(o.toStore))
+                            .put("prepSec", TAKEOUT_PREP.getValue(o.c.kind)).put("waitSec", rnd(o.wait)))
                     }
                 }
             }
             kind == "drivethru" -> {
                 val cs = carS(s)
                 driveThru.indices.map { i -> Triple(net(driveThruSn[i].first, driveThruSn[i].second).len, driveThru[i], driveThruSn[i].first) }
-                    .sortedBy { it.first }.take(3).forEach { (len, t, pt) ->
+                    .sortedBy { it.first }.take(NEARBY_TOP).forEach { (len, t, pt) ->
                         items.put(JSONObject().put("name", t.getString("name")).put("brand", t.optString("brand")).put("lat", t.getDouble("lat")).put("lon", t.getDouble("lon"))
-                            .put("curb", JSONArray().put(t.getDouble("lat")).put(t.getDouble("lon"))).put("dist", Math.floor(len + 0.5).toInt())
+                            .put("curb", JSONArray().put(t.getDouble("lat")).put(t.getDouble("lon"))).put("dist", rnd(len))
                             .put("ahead", project(pt).first >= cs).put("hours", t.optString("hours")))
                     }
             }
@@ -831,7 +867,7 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                 }
                 for (c in cands) if (c.kind == "parking")
                     pool += net(c.curbXy, c.dsnap).len to JSONObject().put("id", c.id).put("name", placeName(c)).put("lat", c.lat).put("lon", c.lon).put("curb", c.curb).put("public", false)
-                pool.sortedBy { it.first }.take(3).forEach { (dd2, o) -> items.put(o.put("dist", Math.floor(dd2 + 0.5).toInt())) }
+                pool.sortedBy { it.first }.take(NEARBY_TOP).forEach { (dd2, o) -> items.put(o.put("dist", rnd(dd2))) }
             }
         }
         return JSONObject().put("kind", kind).put("from", origin).put("items", items)
@@ -843,31 +879,28 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
     private fun paths(s: JSONObject, c: Cand): JSONObject {
         val via = s.optJSONObject("via")
         val r = s.getJSONObject("rider")
-        val key = listOf(Math.floor(carS(s) + 0.5).toInt(), r.opt("lat"), r.opt("lon"), c.id, via?.let { "${it.getDouble("lat")},${it.getDouble("lon")}" }).joinToString("|")
+        val key = listOf(carS(s), r.opt("lat"), r.opt("lon"), c.id, via?.let { "${it.getDouble("lat")},${it.getDouble("lon")}" }).joinToString("|")   // 차 위치는 반올림하지 않는다(evalKey 와 같은 이유)
         pathCache[s.getString("id")]?.let { if (it.first == key) return it.second }
         val car = pointAt(carS(s))
         val out = JSONObject()
         if (via != null) {
             val vp = xy(via.getDouble("lat"), via.getDouble("lon"))
             val a = route(car, vp, true); val b = route(vp, c.curbXy, true, c.dsnap)
-            out.put("carPath", llArr(a.pts + b.pts.drop(1))).put("carPathM", Math.floor(a.len + b.len + 0.5).toInt()).put("carPathSec", Math.floor(a.cost + b.cost + 0.5).toInt())
+            out.put("carPath", llArr(a.pts + b.pts.drop(1))).put("carPathM", rnd(a.len + b.len)).put("carPathSec", rnd(a.cost + b.cost))
         } else {
             val a = route(car, c.curbXy, true, c.dsnap)
-            out.put("carPath", llArr(a.pts)).put("carPathM", Math.floor(a.len + 0.5).toInt()).put("carPathSec", Math.floor(a.cost + 0.5).toInt())
+            out.put("carPath", llArr(a.pts)).put("carPathM", rnd(a.len)).put("carPathSec", rnd(a.cost))
         }
         if (!r.isNull("lat")) {
             val rp = xy(r.getDouble("lat"), r.getDouble("lon"))
             val wr = route(rp, c.poi, false, c.wsnap)
             val straight = dist(rp, c.poi)
-            if (wr.len > straight * WALK_PATH_MAX) out.put("walkPath", llArr(listOf(rp, c.poi))).put("walkPathM", Math.floor(straight * WALK_DETOUR + 0.5).toInt())
-            else out.put("walkPath", llArr(wr.pts)).put("walkPathM", Math.floor(wr.len + 0.5).toInt())
+            if (wr.len > straight * WALK_PATH_MAX) out.put("walkPath", llArr(listOf(rp, c.poi))).put("walkPathM", rnd(straight * WALK_DETOUR))
+            else out.put("walkPath", llArr(wr.pts)).put("walkPathM", rnd(wr.len))
         }
         pathCache[s.getString("id")] = key to out
         return out
     }
-
-    @Synchronized
-    fun latest(): String? = sessions.values.maxByOrNull { it.getDouble("created") }?.getString("id")
 
     @Synchronized
     fun latestCreated(): Pair<String, Double>? = sessions.values.maxByOrNull { it.getDouble("created") }?.let { it.getString("id") to it.getDouble("created") }
@@ -877,10 +910,17 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
         val s = sessions[sid] ?: return null
         touch(sid)
         when (action) {
-            "car" -> { val car = s.getJSONObject("car"); for (k in listOf("progress", "speed", "gear", "wiper")) if (body.has(k)) car.put(k, body.get(k)) }
+            "car" -> {
+                // 진행 보고: 숫자 칸은 유한한 숫자, 글 칸은 글만(잘못된 값을 저장하면 그 세션 평가가 실패한다) — 하나라도 어긋나면 아무것도 바꾸지 않고 400(서버와 같다)
+                for (k in listOf("progress", "speed")) if (body.has(k) && finiteNum(body.get(k)) == null) throw org.json.JSONException(k)
+                for (k in listOf("gear", "wiper")) if (body.has(k) && body.get(k) !is String) throw org.json.JSONException(k)
+                val car = s.getJSONObject("car"); for (k in listOf("progress", "speed", "gear", "wiper")) if (body.has(k)) car.put(k, body.get(k))
+            }
             "rider" -> {
                 val r = s.getJSONObject("rider"); val first = r.isNull("lat")
-                val lat = body.getDouble("lat"); val lon = body.getDouble("lon")   // 둘 다 읽은 뒤에 기록
+                // 위도·경도는 유한한 숫자이고 범위 안이어야 한다(NaN·글·범위 밖은 400, 서버와 같다) — 둘 다 검사한 뒤에 기록
+                val lat = finiteNum(body.opt("lat"))?.takeIf { it in -90.0..90.0 } ?: throw org.json.JSONException("lat")
+                val lon = finiteNum(body.opt("lon"))?.takeIf { it in -180.0..180.0 } ?: throw org.json.JSONException("lon")
                 r.put("lat", lat).put("lon", lon)
                 if (first) logEvent(s, L("${s.getJSONObject("member").getString("name")} 위치 공유 시작", "${s.getJSONObject("member").getString("name")} shared location"))
             }
@@ -894,10 +934,13 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                 }
             }
             "clock" -> {
-                s.put("clock", JSONObject().put("hhmm", body.optString("hhmm", "22:00")).put("weekday", body.optBoolean("weekday", true)))
+                // 잘못된 시각을 저장하면 그 세션의 모든 평가가 실패한다 — 검사하고 어긋나면 세션을 바꾸지 않고 400(서버와 같다)
+                val hhmm = if (body.has("hhmm")) body.get("hhmm") as? String ?: throw org.json.JSONException("hhmm") else DEFAULT_HHMM
+                val weekday = if (body.has("weekday")) body.get("weekday") as? Boolean ?: throw org.json.JSONException("weekday") else true
+                if (!validClock(hhmm)) throw org.json.JSONException("hhmm")
+                s.put("clock", JSONObject().put("hhmm", hhmm).put("weekday", weekday))
                 s.put("proposal", JSONObject.NULL)
-                logEvent(s, L("시연 시각 ${body.optString("hhmm", "22:00")} (${if (body.optBoolean("weekday", true)) "평일" else "주말"})",
-                    "Demo clock ${body.optString("hhmm", "22:00")} (${if (body.optBoolean("weekday", true)) "weekday" else "weekend"})"))
+                logEvent(s, L("시연 시각 $hhmm (${if (weekday) "평일" else "주말"})", "Demo clock $hhmm (${if (weekday) "weekday" else "weekend"})"))
             }
             "emergency" -> {
                 // 차 안 응급 상황: 기다리는 사람 링크를 '픽업이 늦어져요'로 바꾼다 (상세 의료 정보는 보내지 않음)
@@ -911,17 +954,22 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                 if (text.isNotEmpty()) {
                     val ms = s.getJSONArray("messages")
                     ms.put(JSONObject().put("t", System.currentTimeMillis() / 1000.0).put("from", body.optString("from", "rider")).put("text", text))
-                    Regex("""(\d+)\s*분만|give me (\d+) min""", RegexOption.IGNORE_CASE).find(text)?.let { mm ->   // "2분만 기다려 주세요" → 2분 늦게 나온다
-                        val n = (mm.groupValues[1].ifEmpty { mm.groupValues[2] }).toInt()
-                        s.put("riderDelay", max(s.optInt("riderDelay", 0), n * 60))
+                    RIDER_DELAY.find(text)?.let { mm ->   // "2분만 기다려 주세요" → 2분 늦게 나온다
+                        // 1~60분만 받는다: 긴 숫자로 늦춤이 터무니없이 커지거나 변환이 실패해 메시지만 들어간 채 남지 않게(서버와 같다)
+                        val d = mm.groupValues[1].ifEmpty { mm.groupValues[2] }
+                        val n = if (d.length <= 3) d.toInt() else 0
+                        if (n in 1..60) s.put("riderDelay", max(s.optInt("riderDelay", 0), n * 60))
                     }
                     while (ms.length() > 10) ms.remove(0)
                     logEvent(s, "${s.getJSONObject("member").getString("name")}: $text")
                 }
             }
             "via" -> {
-                if (body.has("lat") && body.has("lon") && !body.isNull("lat")) {
-                    s.put("via", JSONObject().put("lat", body.getDouble("lat")).put("lon", body.getDouble("lon")).put("name", body.optString("name").take(40)))
+                if (body.has("lat") && !body.isNull("lat")) {
+                    // 경유지 위치도 유한한 숫자·범위 안만(서버와 같다). lat 이 없거나 null 이면 경유지 해제
+                    val lat = finiteNum(body.get("lat"))?.takeIf { it in -90.0..90.0 } ?: throw org.json.JSONException("lat")
+                    val lon = finiteNum(body.opt("lon"))?.takeIf { it in -180.0..180.0 } ?: throw org.json.JSONException("lon")
+                    s.put("via", JSONObject().put("lat", lat).put("lon", lon).put("name", body.optString("name").take(40)))
                     logEvent(s, L("경유지: ${body.optString("name").take(40)}", "Stop on the way: ${body.optString("name").take(40)}"))
                 } else s.put("via", JSONObject.NULL)
             }
@@ -975,10 +1023,17 @@ class MeeosEngine(mapJson: String, cctvJson: String?, profileJson: String) {
                 }
             }
             "boarding" -> {
-                body.put("riderConfirmed", false)
-                s.put("boarding", body).put("status", body.getString("state"))
-                val boarded = body.getString("state") == "boarded"
-                logEvent(s, L("${body.optString("seatLabel")} ${if (boarded) "탑승" else "하차"} 감지", "${body.optString("seatLabel")}: ${if (boarded) "someone got in" else "someone got out"}"))
+                // 탑승·하차 보고: 상태는 boarded·dropped 만, 저장은 좌석·표시·벨트만(본문을 통째로 대기자 화면에 내보내지 않는다 — 서버와 같다)
+                val state = body.opt("state") as? String
+                if (state != "boarded" && state != "dropped") throw org.json.JSONException("state")
+                val b = JSONObject().put("state", state)
+                if (body.has("seat")) b.put("seat", body.optString("seat").take(40))
+                if (body.has("seatLabel")) b.put("seatLabel", body.optString("seatLabel").take(40))
+                if (body.has("belt")) b.put("belt", body.opt("belt") as? Boolean ?: JSONObject.NULL)
+                b.put("riderConfirmed", false)
+                s.put("boarding", b).put("status", state)
+                val boarded = state == "boarded"
+                logEvent(s, L("${b.optString("seatLabel")} ${if (boarded) "탑승" else "하차"} 감지", "${b.optString("seatLabel")}: ${if (boarded) "someone got in" else "someone got out"}"))
             }
             else -> return null
         }

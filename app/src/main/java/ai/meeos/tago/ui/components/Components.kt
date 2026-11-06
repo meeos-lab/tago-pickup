@@ -1,7 +1,6 @@
 package ai.meeos.tago.ui.components
 
 import ai.meeos.tago.R
-import ai.meeos.tago.ui.BinColor
 import ai.meeos.tago.ui.CardTone
 import ai.meeos.tago.ui.CardUi
 import ai.meeos.tago.ui.MemberUi
@@ -13,7 +12,6 @@ import ai.meeos.tago.ui.theme.Tago
 import ai.meeos.tago.ui.theme.TagoType
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

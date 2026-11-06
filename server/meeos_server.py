@@ -1,4 +1,4 @@
-﻿"""Tago(타고) 시연 서버 — 대치동 실제 데이터 버전.
+"""Tago(타고) 시연 서버 — 대치동 실제 데이터 버전.
 
 - 지도: daechi_map.json (OSM 도로·정류장·횡단보도·신호·학교·POI + 서울시 소방용수시설 소화전)
 - 차량(에뮬레이터) → http://10.0.2.2:8790, PC 브라우저 → http://127.0.0.1:8790
@@ -13,9 +13,9 @@ import json
 import math
 import os
 import re
+import secrets
 import time
 import traceback
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
@@ -57,6 +57,26 @@ PEAK_STOP = PROFILE["peakStop"]                    # 집중 단속 시간에는 
 PICKUP_ONLY = PROFILE["pickupOnly"]                # 주차만 금지인 곳: 잠깐 태우기만, 기다리지 않음
 CAR_HALF = 2.5                                     # 차 길이 약 5m의 절반 — 차체 어느 부분도 금지 구간에 걸치지 않게
 SEARCH_RADIUS = 450.0                              # 아이 위치에서 후보를 찾는 반경(m)
+# 후보·평가 규칙의 고정값(앱 MeeosEngine 의 같은 이름과 같은 값 — tools/check_engine_consts.py 가 대조한다)
+CURB_MAX_D = 40                                    # POI 에서 가장 가까운 도로가 이보다 멀면 후보에서 뺀다(m)
+CURB_SHIFT_MAIN, CURB_SHIFT_SIDE = 9.0, 3.0        # 길가 정차점: 도로 중심에서 POI 쪽으로 옮기는 거리(경로 도로 / 골목, m)
+RULE_CAR_HALF_BELOW = 100                          # 반경이 이보다 작은 규칙에만 차 길이 절반(CAR_HALF)을 더한다(m)
+SIGNAL_ON_ROUTE = 30                               # 경로에서 이 안의 신호를 경로 위 신호로 본다(m)
+SIDE_SPEED = 5.6                                   # 이면도로·못 갈 때 직선 속도(m/s, 20 km/h)
+PASSED_BACK = 120                                  # 지나친 곳으로 되돌아오는 거리(m)
+TURN_RIGHT_WAIT, TURN_LEFT_WAIT = 20, 45           # 반대편 후보로 가는 회전 신호 대기(초)
+CAM_HOURS_ARTERIAL, CAM_HOURS_SIDE = (7, 22), (8, 22)   # 주정차 단속 CCTV 운영 시간(간선 / 이면, 시)
+SCHOOL_FINE, SCHOOL_FINE_HOURS, SCHOOL_FINE_OFF = 12, (8, 20), 4   # 어린이 보호구역 과태료(만원)·가중 시간·시간 밖(대치동 값)
+CROSS_NEAR = 200                                   # 큰길을 건너는지 보는 폭(m)
+NIGHT_SAFE_PTS, NIGHT_SAFE_MAX = 5, 3              # 밤 방범 시설 가점: 개당·최대 개수
+RAIN_WALK = 1.5                                    # 비 올 때 걷기 가중
+MISMATCH_W, COVERED_BONUS, OVER_W = 0.5, 30, 2.0   # 비용: 서로 기다림 가중 · 지붕 있는 곳 가점(초) · 정차 한도 초과 가중
+SENIOR_NEAR_M = 40                                 # 어르신이 '거의 걷지 않는' 거리(m)
+WALK_ONE_MIN_S = 45                                # '도보 1분 이내'(초)
+NEARBY_TOP = 3                                     # 근처 장소·포장 매장 개수
+DEFAULT_HHMM = "22:00"                             # 시연 시계 기본 시각
+ARRIVE_M, ARRIVE_MS = 30, 0.5                      # 확정 지점 이 거리 안·이 속도 아래면 도착
+PLACE_NEAR_M = 150                                 # 차 위치를 'OO 근처'로 부르는 거리(m)
 
 LAT0, LON0 = MAP["center"]
 
@@ -126,7 +146,7 @@ def point_at(s):
     return ROUTE[-1]
 
 
-SIGNAL_S = sorted(project(p)[0] for p in LAYERS["signals"] if abs(project(p)[1]) < 30)
+SIGNAL_S = sorted(s for s, off, _ in map(project, LAYERS["signals"]) if abs(off) < SIGNAL_ON_ROUTE)   # 신호마다 투영은 한 번
 ROADS = [[xy(*c) for c in r["coords"]] for r in MAP["roads"]]
 ROAD_NAMES = [r["name"] for r in MAP["roads"]]
 
@@ -163,7 +183,7 @@ def _node(c):
 
 
 for _r in MAP["roads"]:
-    _ow, _v = _r.get("oneway", ""), ROAD_SPEED.get(_r["highway"], 5.6)
+    _ow, _v = _r.get("oneway", ""), ROAD_SPEED.get(_r["highway"], SIDE_SPEED)
     _ids = [_node(c) for c in _r["coords"]]
     for _a, _b in zip(_ids, _ids[1:]):
         if _a == _b:
@@ -237,9 +257,9 @@ def arrive(D, src, dst, drive):
     return best, end
 
 
-def route(p0, p1, drive, sn0=None, sn1=None):
+def route(p0, p1, drive, sn1=None):
     """실제 길 경로: (비용, 길이 m, [위경도…]). 못 가면 직선"""
-    sn0, sn1 = sn0 or snap(p0), sn1 or snap(p1)
+    sn0, sn1 = snap(p0), sn1 or snap(p1)
     D, prev = dijkstra(sn0, drive)
     return reach(D, prev, p0, p1, sn0, sn1, drive)
 
@@ -248,7 +268,7 @@ def reach(D, prev, p0, p1, sn0, sn1, drive):
     cost, end = arrive(D, sn0, sn1, drive)
     if cost == math.inf:
         L = dist(p0, p1)
-        return (L / 5.6 if drive else L), L, [latlon(*p0), latlon(*p1)]
+        return (L / SIDE_SPEED if drive else L), L, [latlon(*p0), latlon(*p1)]
     nodes = []
     while end >= 0:
         nodes.append(end)
@@ -279,21 +299,20 @@ CANDS = []
 for i, c in enumerate(MAP["candidates"]):
     p = xy(c["lat"], c["lon"])
     d, q, road = nearest_road(p)
-    if q is None or d > 40:
+    if q is None or d > CURB_MAX_D:
         continue
     # 길가 정차점: 도로 중심선에서 POI 쪽으로 (큰길은 차로 폭을 감안해 9m, 골목은 3m)
-    k = min(d, 9.0 if road == MAP["routeName"] else 3.0) / (d or 1)
+    k = min(d, CURB_SHIFT_MAIN if road == MAP["routeName"] else CURB_SHIFT_SIDE) / (d or 1)
     curb = (q[0] + (p[0] - q[0]) * k, q[1] + (p[1] - q[1]) * k) if d > 0 else q
     s, off, _ = project(curb)
     blocked, pickup, fine = [], [], 0
     for layer, radius, reason, ban in RULES:
         near = min((dist(curb, o) for o in LAYERS[layer]), default=1e9)
-        if near <= radius + (CAR_HALF if radius < 100 else 0):
+        if near <= radius + (CAR_HALF if radius < RULE_CAR_HALF_BELOW else 0):
             (blocked if ban == "stop" else pickup).append(f"{reason} ({rnd(near)}m)")
             if ban == "stop":
                 fine = max(fine, FINE[layer])
-    cctv = min((dist(curb, o) for o in CCTV), default=None)
-    cams = sorted((rnd(dist(curb, o)), j) for j, o in enumerate(CCTV) if dist(curb, o) <= CAM_RANGE)
+    cams = sorted((rnd(d), j) for j, d in ((j, dist(curb, o)) for j, o in enumerate(CCTV)) if d <= CAM_RANGE)
     if PROFILE.get("routeCurbBan") and road == MAP["routeName"]:
         blocked.append(PROFILE["routeCurbBan"])
     if c["kind"] == "academy" and PROFILE.get("academyRule"):
@@ -304,10 +323,10 @@ for i, c in enumerate(MAP["candidates"]):
         "id": f"c{i}", "name": c["name"], "icon": c["icon"], "kind": c["kind"], "covered": bool(c.get("covered")),
         "lat": c["lat"], "lon": c["lon"], "curb": [clat, clon], "road": road or L("골목", "side street"), "onRoute": road == MAP["routeName"],
         "s": r1(s), "off": r1(off), "blocked": blocked, "xy": curb, "poi": p, "fine": fine,
-        "cctv": rnd(cctv) if cctv is not None else None, "cams": cams, "pickup": pickup,
+        "cams": cams, "pickup": pickup,
         "safe": sum(1 for o in SAFETY if dist(p, o) <= SAFE_RANGE),
         "wsnap": snap(p), "dsnap": snap(curb),
-        "toilet": min((dist(p, xy(t["lat"], t["lon"])) for t in TOILETS), default=None),
+        "toilet": min((dist(p, tp) for tp, _ in TOILET_SN), default=None),
     })
 
 
@@ -323,6 +342,7 @@ def josa(word, with_final, without):
 sessions = {}
 lock = Lock()
 # 세션 저장 상한(앱 내장 엔진 MAX_SESSIONS 와 같다). 넘치면 끝난 세션(탑승·하차)이나 오래 조용한 세션부터, 없을 때만 가장 오래된 것부터 지운다
+MAX_BODY = 64 * 1024   # 요청 본문 상한(앱 LocalServer·pt_relay 의 MAX_BODY 와 같은 값)
 MAX_SESSIONS = 100
 IDLE_EVICT_SEC = 30 * 60
 touched = {}                                       # 세션 id → 마지막으로 조회·조작된 시각(공개 상태에는 넣지 않는다)
@@ -348,8 +368,43 @@ def evict_one():
 
 # 기다리는 사람의 메시지(차에서 소리 내어 읽는다): 제어 문자·줄바꿈은 빈칸으로, 보이지 않는 방향·폭 없는 문자는 빼고 80자까지
 MSG_MAX = 80
-MSG_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
-MSG_INVIS = re.compile(r"[​‌‎‏‪-‮⁦-⁩﻿]")
+MSG_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+MSG_INVIS = re.compile(r"[\u200b\u200c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]")   # 보이지 않는 문자는 이스케이프로 적는다(앱 MSG_INVIS 와 같은 집합)
+
+RIDER_DELAY = re.compile(r"([0-9]+) *분만|give me ([0-9]+) min", re.I)   # 기다리는 사람 "N분만"(앱 RIDER_DELAY 와 같다 — [0-9]·공백만)
+HHMM = re.compile(r"[0-9]{2}:[0-9]{2}")   # 시연 시각 형식(앱 HHMM 과 같다 — Python \d 는 유니코드 숫자도 받으므로 [0-9])
+
+
+def valid_clock(hhmm):
+    """'hh:mm'(00:00–23:59)인지 — 세션 생성·시각 바꾸기 공용(앱 validClock 과 같다)"""
+    return isinstance(hhmm, str) and bool(HHMM.fullmatch(hhmm)) and int(hhmm[:2]) < 24 and int(hhmm[3:5]) < 60
+
+
+def finite_num(v):
+    """JSON 숫자(불리언·글 아님)이고 유한하면 float, 아니면 None — 입력 검사용(앱 finiteNum 과 같다)"""
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+
+def opt_string(d, key, fallback=""):
+    """앱 엔진(org.json optString)과 같은 문자열 꺼내기: 키가 없으면 fallback, null 은 "null", 불리언은 true/false"""
+    if key not in d:
+        return fallback
+    v = d[key]
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return v if isinstance(v, str) else str(v)
+
+
+def opt_bool(d, key, fallback=True):
+    """앱 엔진(org.json optBoolean)과 같은 불리언 꺼내기: 불리언, 또는 문자열 true/false(대소문자 무시), 그 밖은 fallback"""
+    v = d.get(key)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str) and v.lower() in ("true", "false"):
+        return v.lower() == "true"
+    return fallback
 
 
 def clean_message(raw):
@@ -376,17 +431,17 @@ def car_time(sess, c):
             nxt = next((x for x in SIGNAL_S if x > c["s"]), ROUTE_LEN)
             uturn = (nxt - cs) / v + UTURN_PENALTY + (nxt - c["s"]) / v
             return (loop, False, L("블록을 돌아 반대편 정차(유턴 없음)", "Go around the block to the far side (no U-turn)")) if loop <= uturn else (uturn, True, L("신호 교차로에서 유턴", "U-turn at the signal"))
-        return (-ahead + 120) / v + UTURN_PENALTY * 2, True, L("지나쳐서 되돌아와야 함", "Passed it — must come back around")
+        return (-ahead + PASSED_BACK) / v + UTURN_PENALTY * 2, True, L("지나쳐서 되돌아와야 함", "Passed it — must come back around")
     # 골목(옆길) 후보: 경로에서 꺾어 들어감
-    turn = 20 if right else 45                              # 우회전 / 좌회전 신호 대기
+    turn = TURN_RIGHT_WAIT if right else TURN_LEFT_WAIT                              # 우회전 / 좌회전 신호 대기
     if ahead >= 0:
         return ahead / v + abs(c["off"]) / v + turn, False, L("우회전 후 골목 정차", "Turn right into the side street") if right else L("좌회전 후 골목 정차", "Turn left into the side street")
-    return (-ahead + 120) / v + abs(c["off"]) / v + UTURN_PENALTY, True, L("지나쳐서 되돌아와야 함", "Passed it — must come back around")
+    return (-ahead + PASSED_BACK) / v + abs(c["off"]) / v + UTURN_PENALTY, True, L("지나쳐서 되돌아와야 함", "Passed it — must come back around")
 
 
 def clock(sess):
     """시연 시계: (시각(시, 소수), 평일 여부). 실서비스는 차량 시계."""
-    c = sess.get("clock") or {"hhmm": "22:00", "weekday": True}
+    c = sess.get("clock") or {"hhmm": DEFAULT_HHMM, "weekday": True}
     h, mnt = (int(x) for x in c["hhmm"].split(":"))
     return h + mnt / 60, bool(c.get("weekday", True))
 
@@ -399,7 +454,7 @@ def cam_active(cam, h, weekday):
     """강남구 고정형 CCTV 운영 시간: 간선 07–22시, 이면 08–22시, 심야 운영 카메라는 종일[추정], 주말은 토·공휴일 운영 카메라만."""
     if not weekday and not cam.get("weekend"):
         return False
-    return cam.get("night") or in_hours(h, [(7, 22)] if cam.get("arterial") else [(8, 22)])
+    return cam.get("night") or in_hours(h, [CAM_HOURS_ARTERIAL] if cam.get("arterial") else [CAM_HOURS_SIDE])
 
 
 def stop_limit(sess, c):
@@ -427,32 +482,33 @@ def evaluate(sess):
     kind = sess["member"]["type"]
     rp = xy(r["lat"], r["lon"])
     r_off = project(rp)[1]
-    raining = sess["car"].get("wiper", "OFF") not in ("OFF", "OTHER", None)
+    raining = sess["car"].get("wiper", "OFF") not in ("OFF", "OTHER", None, "", "null")   # 앱 raining 판정과 같은 집합
     hour, weekday = clock(sess)
     scored, excluded = [], []
+    passed, cs0 = sess.get("passed", []), car_s(sess)   # 평가 중 세션은 바뀌지 않는다 — 후보마다 다시 계산하지 않는다
     for c in CANDS:
         straight = dist(rp, c["poi"])
         if straight > SEARCH_RADIUS:
             continue
-        if c["id"] in sess.get("passed", []):
+        if c["id"] in passed:
             excluded.append({"id": c["id"], "name": c["name"], "icon": c["icon"], "reason": L("방금 서지 못하고 지나침", "Just drove past it — couldn't stop"),
                              "curb": c["curb"], "dist": rnd(straight), "fine": None})
             continue
-        if sess.get("passed") and c["s"] < car_s(sess):   # 한 번 지나친 뒤에는 차보다 앞에 있는 곳만
+        if passed and c["s"] < cs0:   # 한 번 지나친 뒤에는 차보다 앞에 있는 곳만
             excluded.append({"id": c["id"], "name": c["name"], "icon": c["icon"], "reason": L("이미 지나온 곳", "Already behind the car"),
                              "curb": c["curb"], "dist": rnd(straight), "fine": None})
             continue
         if c["blocked"]:
             excluded.append({"id": c["id"], "name": c["name"], "icon": c["icon"], "reason": c["blocked"][0], "curb": c["curb"],
-                             "dist": rnd(straight), "fine": c["fine"] if c["fine"] != 12 or in_hours(hour, [(8, 20)]) else 4})
+                             "dist": rnd(straight), "fine": c["fine"] if c["fine"] != SCHOOL_FINE or in_hours(hour, [SCHOOL_FINE_HOURS]) else SCHOOL_FINE_OFF})
             continue
         lane = BUS_LANES.get(c["road"])
         if lane and weekday and in_hours(hour, lane[1]):
             excluded.append({"id": c["id"], "name": c["name"], "icon": c["icon"], "reason": lane[0], "curb": c["curb"],
                              "dist": rnd(straight), "fine": 4})
             continue
-        crossing = c["onRoute"] and abs(r_off) < 200 and (r_off > 0) != (c["off"] > 0)
-        crossing = crossing or (not c["onRoute"] and abs(r_off) < 200 and abs(c["off"]) < 200 and (r_off > 0) != (c["off"] > 0))
+        crossing = c["onRoute"] and abs(r_off) < CROSS_NEAR and (r_off > 0) != (c["off"] > 0)
+        crossing = crossing or (not c["onRoute"] and abs(r_off) < CROSS_NEAR and abs(c["off"]) < CROSS_NEAR and (r_off > 0) != (c["off"] > 0))
         if crossing and kind in ("child", "senior"):
             excluded.append({"id": c["id"], "name": c["name"], "icon": c["icon"], "curb": c["curb"], "dist": rnd(straight),
                              "reason": L(f"{'아이가' if kind == 'child' else '어르신이'} 큰길({MAP['routeName']})을 건너야 함",
@@ -471,9 +527,9 @@ def evaluate(sess):
             elif c["kind"] in RESTROOM_KINDS:
                 bonus, why = bonus + TOILET_BONUS, L("화장실을 쓸 수 있는", "with a customer restroom")
         if in_hours(hour, NIGHT):
-            bonus += 5 * min(c["safe"], 3)          # 밤에는 방범 시설(보안등·CCTV·안심벨) 있는 곳을 조금 더
+            bonus += NIGHT_SAFE_PTS * min(c["safe"], NIGHT_SAFE_MAX)          # 밤에는 방범 시설(보안등·CCTV·안심벨) 있는 곳을 조금 더
         ct, uturn, how = car_time(sess, c)
-        w = WALK_WEIGHT[kind] * (1.5 if raining else 1.0)
+        w = WALK_WEIGHT[kind] * (RAIN_WALK if raining else 1.0)
         # 아이가 지금 출발한다고 볼 때 차가 길가에서 기다리는 시간. 정차 한도를 넘으면 후보에서 뺀다
         car_wait = max(0.0, walk - ct)
         limit, limit_why = stop_limit(sess, c)
@@ -483,7 +539,7 @@ def evaluate(sess):
                                          f"Car would wait over {rnd(car_wait / 60)} min — that counts as parking"), "fine": FINE.get("busStops", 0)})
             continue
         over = max(0.0, car_wait - limit)
-        cost = (ct + w * walk + 0.5 * abs(ct - walk) - (30 if raining and c["covered"] else 0) - bonus + 2.0 * over)
+        cost = (ct + w * walk + MISMATCH_W * abs(ct - walk) - (COVERED_BONUS if raining and c["covered"] else 0) - bonus + OVER_W * over)
         scored.append({"id": c["id"], "name": c["name"], "icon": c["icon"], "curb": c["curb"], "road": c["road"],
                        "cost": rnd(cost), "carSec": rnd(ct), "walkSec": rnd(walk), "uturn": uturn,
                        "crossing": crossing, "route": how, "covered": c["covered"], "s": c["s"], "prefer": why,
@@ -501,7 +557,7 @@ def explain(sess, best, excluded, raining, scored):
     name = sess["member"]["name"]
     kind = sess["member"]["type"]
     parts = []
-    banned = [e for e in excluded if "금지" in e["reason"] or "밀집" in e["reason"]]
+    banned = [e for e in excluded if (c := cand_by_id(e["id"])) and c["blocked"][:1] == [e["reason"]]]   # 정차 금지 규칙(blocked)으로 뺀 곳만 센다(앱과 같다) — 문구로 세면 어바인 소화전(§22514)처럼 금지 문구가 없는 규칙을 놓친다
     lead = ""
     words = {"소화전": "소화전과", "횡단보도": "횡단보도와", "버스정류장": "버스정류장과", "교차로": "교차로와"}
     legal = [e for e in banned if 20 <= e["dist"] < 150 and any(e["reason"].startswith(k) for k in words)]
@@ -516,7 +572,7 @@ def explain(sess, best, excluded, raining, scored):
     walk_m = best["walkSec"] * WALK_SPEED[kind]
     closest = min(scored, key=lambda x: x["walkSec"])
     saved = closest["carSec"] - best["carSec"]
-    if kind == "senior" and walk_m < 40:
+    if kind == "senior" and walk_m < SENIOR_NEAR_M:
         parts.append(f"{who} 거의 걷지 않도록 차가 {'블록을 돌아 ' if '블록' in best['route'] else ''}바로 앞에 서는")
     elif kind in ("child", "senior") and not best["crossing"]:
         parts.append(f"{who} 큰길을 건너지 않는")
@@ -524,16 +580,17 @@ def explain(sess, best, excluded, raining, scored):
         parts.append(f"{who} 횡단보도로 건너오는")
     if raining and best["covered"]:
         parts.append("비를 피할 수 있는")
-    if best.get("prefer") and not (kind == "senior" and walk_m < 40):
+    if best.get("prefer") and not (kind == "senior" and walk_m < SENIOR_NEAR_M):
         parts.append(best["prefer"])
     if sess.get("needToilet") and best.get("prefer") in ("화장실에 들르기 좋은", "화장실을 쓸 수 있는"):
-        parts.remove(best["prefer"]) if best["prefer"] in parts else None
+        if best["prefer"] in parts:
+            parts.remove(best["prefer"])
         parts.insert(0, best["prefer"])            # 화장실이 급할 때는 그 이유를 먼저 말한다
     if kind == "adult" and best is not closest and saved >= 20:
         parts.insert(0, f"조금 걷지만 차가 {rnd(saved / 60) if saved >= 60 else saved}{'분' if saved >= 60 else '초'} 빨리 도착하는")
     if not best["uturn"] and "블록" not in best["route"]:
         parts.append("유턴 없이 가는")
-    walk_txt = "도보 1분 이내" if best["walkSec"] < 45 else f"도보 {rnd(best['walkSec'] / 60)}분"
+    walk_txt = "도보 1분 이내" if best["walkSec"] < WALK_ONE_MIN_S else f"도보 {rnd(best['walkSec'] / 60)}분"
     lane = next((e for e in excluded if "버스전용차로" in e["reason"]), None)
     if lane:
         lead += f"버스전용차로 운영 시간이라 {lane['name']} 쪽 큰길은 제외했습니다. "
@@ -547,27 +604,27 @@ def explain(sess, best, excluded, raining, scored):
     # 운전 중 음성은 한 문장(주의분산 최소화): 금지 구역 수 + 핵심 이유 1개 + 장소
     hook = f"정차 금지 {len(banned)}곳 제외. " if banned else ""
     key = parts[0] if parts else ""
-    if kind == "senior" and walk_m < 40:
+    if kind == "senior" and walk_m < SENIOR_NEAR_M:
         key = f"{who} 거의 걷지 않는"
     speech = f"{hook}{key + ' ' if key else ''}{best['name']} 앞을 제안합니다."
     return screen, speech
 
 
 def mins_en(sec):
-    return "under a minute" if sec < 45 else f"{rnd(sec / 60)} min"
+    return "under a minute" if sec < WALK_ONE_MIN_S else f"{rnd(sec / 60)} min"
 
 
 def explain_en(sess, best, excluded, raining, scored):
     name = sess["member"]["name"]
     kind = sess["member"]["type"]
-    banned = [e for e in excluded if "no stopping" in e["reason"] or "Main road" in e["reason"] or "School" in e["reason"]]
+    banned = [e for e in excluded if (c := cand_by_id(e["id"])) and c["blocked"][:1] == [e["reason"]]]   # 정차 금지 규칙(blocked)으로 뺀 곳만 센다(앱과 같다) — 문구로 세면 어바인 소화전(§22514)처럼 금지 문구가 없는 규칙을 놓친다
     spots = f"{len(banned)} no-stopping spot{'s' if len(banned) != 1 else ''}"
     lead = f"Skipped {spots}. " if banned else ""
     parts = []
     walk_m = best["walkSec"] * WALK_SPEED[kind]
     closest = min(scored, key=lambda x: x["walkSec"])
     saved = closest["carSec"] - best["carSec"]
-    if kind == "senior" and walk_m < 40:
+    if kind == "senior" and walk_m < SENIOR_NEAR_M:
         parts.append(f"{name} barely has to walk")
     elif kind in ("child", "senior") and not best["crossing"]:
         parts.append(f"{name} doesn't cross {MAP['routeName']}")
@@ -575,10 +632,11 @@ def explain_en(sess, best, excluded, raining, scored):
         parts.append(f"{name} crosses at the crosswalk")
     if raining and best["covered"]:
         parts.append("out of the rain")
-    if best.get("prefer") and not (kind == "senior" and walk_m < 40):
+    if best.get("prefer") and not (kind == "senior" and walk_m < SENIOR_NEAR_M):
         parts.append(best["prefer"])
     if sess.get("needToilet") and best.get("prefer") in ("next to a restroom", "with a customer restroom"):
-        parts.remove(best["prefer"]) if best["prefer"] in parts else None
+        if best["prefer"] in parts:
+            parts.remove(best["prefer"])
         parts.insert(0, best["prefer"])
     if kind == "adult" and best is not closest and saved >= 20:
         parts.insert(0, f"a short walk saves the car {mins_en(saved)}")
@@ -599,7 +657,7 @@ def cand_by_id(cid):
 
 
 # 근처 장소: 주차장(정차 한도를 넘겨 기다려야 할 때) · 화장실(급할 때)
-NEARBY_KINDS = {"parking": "parking", "toilet": "toilet", "drivethru": "drivethru", "takeout": "takeout"}
+NEARBY_KINDS = ("parking", "toilet", "drivethru", "takeout")   # 근처 장소 종류(소속 검사만 한다)
 # 가는 길 포장 주문: 앞에 차를 세울 수 있는(정차 금지 아님) 매장만. 준비 시간은 시연 가정
 TAKEOUT_PREP = {"cafe": 300, "fast_food": 420, "convenience": 60}
 TAKEOUT_STOP = 90                                  # 매장 앞에 세우고 받아 오는 시간(초)
@@ -664,7 +722,7 @@ def nearby(s, kind, origin=None):
             c, L = net(pt, sn)
             opts.append((L, t))
         opts.sort(key=lambda o: o[0])
-        for L, t in opts[:3]:
+        for L, t in opts[:NEARBY_TOP]:
             items.append({"name": t["name"], "lat": t["lat"], "lon": t["lon"], "curb": [t["lat"], t["lon"]],
                           "dist": rnd(L), "inside": bool(t.get("inside")), "hours": t.get("hours", ""),
                           "exit": t.get("exit", ""), "detail": t.get("detail", "")})
@@ -692,7 +750,7 @@ def nearby(s, kind, origin=None):
                 late = max(0.0, extra + wait - slack)                           # 아이보다 늦게 닿는 시간
                 opts.append((rnd(late), rnd(extra), c, to_store, wait))
             opts.sort(key=lambda o: (o[0], o[1], o[2]["id"]))
-            for late, extra, c, to_store, wait in opts[:3]:
+            for late, extra, c, to_store, wait in opts[:NEARBY_TOP]:
                 items.append({"id": c["id"], "name": c["name"], "kind": c["kind"], "lat": c["lat"], "lon": c["lon"], "curb": c["curb"],
                               "dist": rnd(reach(CD, CP, car, c["xy"], car_sn, c["dsnap"], True)[1]), "extraSec": extra, "lateSec": late,
                               "slackSec": rnd(slack), "carToStoreSec": rnd(to_store), "prepSec": TAKEOUT_PREP[c["kind"]], "waitSec": rnd(wait)})
@@ -702,7 +760,7 @@ def nearby(s, kind, origin=None):
             c, L = net(pt, sn)
             opts.append((L, t, pt))
         opts.sort(key=lambda o: o[0])
-        for L, t, pt in opts[:3]:
+        for L, t, pt in opts[:NEARBY_TOP]:
             items.append({"name": t["name"], "brand": t.get("brand", ""), "lat": t["lat"], "lon": t["lon"], "curb": [t["lat"], t["lon"]],
                           "dist": rnd(L), "ahead": project(pt)[0] >= cs, "hours": t.get("hours", "")})
     else:
@@ -717,7 +775,7 @@ def nearby(s, kind, origin=None):
             if c["kind"] == "parking":
                 pool.append((net(c["xy"], c["dsnap"])[1], {"id": c["id"], "name": place_name(c), "lat": c["lat"], "lon": c["lon"], "curb": c["curb"], "public": False}))
         pool.sort(key=lambda x: x[0])
-        items = [{**it, "dist": rnd(d)} for d, it in pool[:3]]
+        items = [{**it, "dist": rnd(d)} for d, it in pool[:NEARBY_TOP]]
     return {"kind": kind, "from": origin, "items": items}
 
 
@@ -789,7 +847,7 @@ def refresh(s):
     if not s["leaveNow"] and ct <= walk + margin:
         s["leaveNow"] = True
         log_event(s, L(f"{s['member']['name']}에게 '지금 나오세요' 알림", f"Told {s['member']['name']} to head out now"))
-    if s["status"] == "confirmed" and abs(car_s(s) - c["s"]) < 30 and s["car"]["speed"] < 0.5:
+    if s["status"] == "confirmed" and abs(car_s(s) - c["s"]) < ARRIVE_M and s["car"]["speed"] < ARRIVE_MS:
         s["status"] = "arrived"
         log_event(s, L(f"차가 {c['name']} 앞에 도착", f"Car arrived at {c['name']}"))
 
@@ -831,7 +889,7 @@ def public(s):
     out["maxProgress"] = ROUTE_LEN - s["scenario"]["carStartS"]
     cp = point_at(cs)
     near = min(CANDS, key=lambda c: dist(cp, c["xy"]))
-    out["carPlace"] = (L(f"{MAP['routeName']} {near['name']} 근처", f"{MAP['routeName']} near {near['name']}") if dist(cp, near["xy"]) < 150
+    out["carPlace"] = (L(f"{MAP['routeName']} {near['name']} 근처", f"{MAP['routeName']} near {near['name']}") if dist(cp, near["xy"]) < PLACE_NEAR_M
                        else L(f"{MAP['routeName']} (대치동)", f"{MAP['routeName']}, {PROFILE['area']}"))
     out["region"] = {"id": REGION, "lang": LANG, "country": PROFILE["country"], "label": PROFILE["label"]}
     out["target"] = ({"id": conf["id"], "name": conf["name"], "curb": conf["curb"], "x": conf["s"] - s["scenario"]["carStartS"]}
@@ -849,6 +907,8 @@ VC_ORIGINS = {"http://127.0.0.1:8088", "http://localhost:8088"}
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 10   # 초: 아무것도 보내지 않는 연결이 스레드를 붙들지 못하게(pt_relay SOCKET_TIMEOUT 과 같다)
+
     def _send(self, code, body, ctype):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -866,6 +926,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
     def do_GET(self):
+        # 조회 중 예외(잘못 저장된 값 등)에도 연결을 그냥 끊지 않고 500 을 돌려준다(앱 LocalServer 와 같다). 내용은 서버 기록에만
+        try:
+            self._get()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            self._json(500, {"error": "server error"})
+
+    def _get(self):
         path = urlparse(self.path).path
         parts = [p for p in path.split("/") if p]
         if len(parts) == 2 and parts[0] in ("m", "car", "f"):
@@ -911,9 +979,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parts = [p for p in urlparse(self.path).path.split("/") if p]
-        n = int(self.headers.get("Content-Length", 0) or 0)
+        # 본문: chunked·숫자 아닌 길이·음수·상한 초과는 읽지 않고 400(앱 LocalServer 와 같다 — 전에는 상한 초과를 빈 본문으로 처리했다)
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            return self._json(400, {"error": "chunked not supported"})
         try:
-            body = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 65536 else {}
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            return self._json(400, {"error": "bad length"})
+        if n < 0 or n > MAX_BODY:
+            return self._json(400, {"error": "body too large" if n > MAX_BODY else "bad length"})
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}") if n > 0 else {}
         except ValueError:
             return self._json(400, {"error": "bad json"})
         if not isinstance(body, dict):
@@ -932,10 +1008,16 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self, parts, body):
         with lock:
             if parts == ["api", "session"]:
-                member = body.get("member") or PROFILE["member"]
-                sid = uuid.uuid4().hex[:16]   # 세션 id = 링크의 열쇠, 앱 내장 엔진과 같은 길이(64비트)
-                s = {"id": sid, "created": time.time(), "member": member, "scenario": scenario(), "clock": body.get("clock") or {"hhmm": "22:00", "weekday": True},
-                     "car": {"progress": 0.0, "speed": 0.0, "gear": "P", "wiper": "OFF", "desc": body.get("carDesc", PROFILE["carDesc"])},
+                # 요청 본문은 믿지 않는다(앱 createSession 과 같은 정리): member 는 이름(20자)·대상 종류만, clock 은 hhmm·weekday 만, carDesc 는 40자
+                raw_m = body["member"] if isinstance(body.get("member"), dict) else PROFILE["member"]
+                member = {"name": opt_string(raw_m, "name")[:20] or PROFILE["member"]["name"],
+                          "type": t if (t := opt_string(raw_m, "type")) in WALK_SPEED else PROFILE["member"]["type"]}
+                raw_c = body["clock"] if isinstance(body.get("clock"), dict) else None
+                hhmm = opt_string(raw_c, "hhmm") if raw_c is not None else ""
+                clk = {"hhmm": hhmm if valid_clock(hhmm) else DEFAULT_HHMM, "weekday": opt_bool(raw_c, "weekday") if raw_c is not None else True}
+                sid = secrets.token_hex(8)   # 세션 id = 링크의 열쇠: 64비트 난수 16자리 16진수(앱 SecureRandom 과 같은 길이·엔트로피)
+                s = {"id": sid, "created": time.time(), "member": member, "scenario": scenario(), "clock": clk,
+                     "car": {"progress": 0.0, "speed": 0.0, "gear": "P", "wiper": "OFF", "desc": opt_string(body, "carDesc", PROFILE["carDesc"])[:40]},
                      "rider": {"lat": None, "lon": None, "name": member["name"]},
                      "proposal": None, "proposalVersion": 0, "confirmed": None, "confirmedBy": None,
                      "leaveNow": False, "eta": None, "status": "waiting_rider", "boarding": None, "events": [], "messages": [], "emergency": None,
@@ -952,12 +1034,15 @@ class Handler(BaseHTTPRequestHandler):
             s, action = sessions[parts[2]], parts[3]
             touch(parts[2])
             if action == "car":
+                # 진행 보고: 숫자 칸은 유한한 숫자, 글 칸은 글만 — 하나라도 어긋나면 아무것도 바꾸지 않고 400(앱과 같다)
+                if any(k in body and finite_num(body[k]) is None for k in ("progress", "speed")) or \
+                        any(k in body and not isinstance(body[k], str) for k in ("gear", "wiper")):
+                    raise ValueError("car")
                 s["car"].update({k: body[k] for k in ("progress", "speed", "gear", "wiper") if k in body})
             elif action == "rider":
                 first = s["rider"]["lat"] is None
-                try:
-                    lat, lon = float(body["lat"]), float(body["lon"])
-                except (KeyError, TypeError, ValueError):
+                lat, lon = finite_num(body.get("lat")), finite_num(body.get("lon"))   # 유한한 숫자·범위 안만(NaN·글은 400, 앱과 같다)
+                if lat is None or lon is None or not -90 <= lat <= 90 or not -180 <= lon <= 180:
                     return 400, {"error": "lat/lon"}
                 s["rider"].update({"lat": lat, "lon": lon})
                 if first:
@@ -970,7 +1055,11 @@ class Handler(BaseHTTPRequestHandler):
                     log_event(s, L(f"{'운전자' if by == 'driver' else s['member']['name']} 확정: {cand_by_id(cid)['name']}",
                                    f"{'Driver' if by == 'driver' else s['member']['name']} confirmed: {cand_by_id(cid)['name']}"))
             elif action == "clock":
-                s["clock"] = {"hhmm": body.get("hhmm", "22:00"), "weekday": bool(body.get("weekday", True))}
+                # 잘못된 시각을 저장하면 그 세션의 모든 평가가 실패한다 — 검사하고 어긋나면 세션을 바꾸지 않고 400(앱과 같다)
+                hhmm, weekday = body.get("hhmm", DEFAULT_HHMM), body.get("weekday", True)
+                if not valid_clock(hhmm) or not isinstance(weekday, bool):
+                    raise ValueError("bad clock")
+                s["clock"] = {"hhmm": hhmm, "weekday": weekday}
                 s["proposal"] = None                       # 시간 규칙이 바뀌었으니 다시 제안
                 log_event(s, L(f"시연 시각 {s['clock']['hhmm']} ({'평일' if s['clock']['weekday'] else '주말'})",
                                f"Demo clock {s['clock']['hhmm']} ({'weekday' if s['clock']['weekday'] else 'weekend'})"))
@@ -985,14 +1074,21 @@ class Handler(BaseHTTPRequestHandler):
                 text = clean_message(body.get("text"))
                 if text:
                     s["messages"].append({"t": time.time(), "from": body.get("from", "rider"), "text": text})
-                    mm = re.search(r"(\d+)\s*분만|give me (\d+) min", text, re.I)
-                    if mm:                                 # "2분만 기다려 주세요" → 아이가 2분 늦게 나온다
-                        s["riderDelay"] = max(s.get("riderDelay", 0), int(mm.group(1) or mm.group(2)) * 60)
+                    mm = RIDER_DELAY.search(text)
+                    if mm:                                 # "2분만 기다려 주세요" → 아이가 2분 늦게 나온다(1~60분만 받는다 — 앱과 같다)
+                        d = mm.group(1) or mm.group(2)
+                        n = int(d) if len(d) <= 3 else 0
+                        if 1 <= n <= 60:
+                            s["riderDelay"] = max(s.get("riderDelay", 0), n * 60)
                     del s["messages"][:-10]
                     log_event(s, f"{s['member']['name']}: {text}")
             elif action == "via":
-                if body.get("lat") is not None and body.get("lon") is not None:
-                    s["via"] = {"lat": float(body["lat"]), "lon": float(body["lon"]), "name": str(body.get("name", ""))[:40]}
+                if body.get("lat") is not None:
+                    # 경유지 위치도 유한한 숫자·범위 안만(앱과 같다). lat 이 없거나 null 이면 경유지 해제
+                    lat, lon = finite_num(body.get("lat")), finite_num(body.get("lon"))
+                    if lat is None or lon is None or not -90 <= lat <= 90 or not -180 <= lon <= 180:
+                        raise ValueError("via lat/lon")
+                    s["via"] = {"lat": lat, "lon": lon, "name": opt_string(body, "name")[:40]}
                     log_event(s, L(f"경유지: {s['via']['name']}", f"Stop on the way: {s['via']['name']}"))
                 else:
                     s["via"] = None
@@ -1034,10 +1130,24 @@ class Handler(BaseHTTPRequestHandler):
                     b["riderConfirmed"], b["riderT"] = True, time.time()
                     log_event(s, L(f"{s['member']['name']}: 탔어요 (본인 확인)", f"{s['member']['name']}: I'm in (confirmed)"))
             elif action == "boarding":
-                body["riderConfirmed"] = False
-                s["boarding"], s["status"] = body, body["state"]
-                boarded = body["state"] == "boarded"
-                log_event(s, L(f"{body.get('seatLabel')} {'탑승' if boarded else '하차'} 감지", f"{body.get('seatLabel')}: {'someone got in' if boarded else 'someone got out'}"))
+                # 탑승·하차 보고: 상태는 boarded·dropped 만, 저장은 좌석·표시·벨트만(본문을 통째로 대기자 화면에 내보내지 않는다 — 앱과 같다)
+                state = body.get("state")
+                if state not in ("boarded", "dropped"):
+                    raise ValueError("boarding state")
+                b = {"state": state}
+                if "seat" in body:
+                    b["seat"] = opt_string(body, "seat")[:40]
+                if "seatLabel" in body:
+                    b["seatLabel"] = opt_string(body, "seatLabel")[:40]
+                if "belt" in body:
+                    b["belt"] = body["belt"] if isinstance(body["belt"], bool) else None
+                b["riderConfirmed"] = False
+                s["boarding"], s["status"] = b, state
+                boarded = state == "boarded"
+                label = b.get("seatLabel", "")
+                log_event(s, L(f"{label} {'탑승' if boarded else '하차'} 감지", f"{label}: {'someone got in' if boarded else 'someone got out'}"))
+            else:
+                return 404, {"error": "unknown action"}   # 모르는 동작은 세션을 건드리지 않고 404(앱 LocalServer 와 같다 — 전에는 200 + 상태)
             refresh(s)
             return 200, json.dumps(public(s), ensure_ascii=False).encode()
 

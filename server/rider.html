@@ -62,6 +62,8 @@
   button { font:inherit; font-size:17px; line-height:24px; min-height:56px; padding:14px 16px; border:1px solid var(--line); background:var(--card); color:var(--text);
            width:100%; margin-top:12px; cursor:pointer; transition:transform 80ms, background-color 80ms; }
   button:active { transform:scale(.97); background:var(--face); }
+  /* 키보드·스위치 접근: 포커스 링을 명시한다(브라우저 기본 링은 흰·검정 바탕에서 보이지 않을 수 있다 — WCAG 2.4.7, docs/dev/89 3절) */
+  button:focus-visible, summary:focus-visible, a:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
   .primary { background:var(--ink); color:var(--onink); border-color:var(--ink); font-weight:700; }
   .primary:active { background:var(--ink); opacity:.85; }
   .ghost { background:var(--card); color:var(--text); }
@@ -868,6 +870,8 @@ function drawMap(s) {
   let carLL = [s.carPos.lat, s.carPos.lon];
   if ((s.status === 'arrived' || boardedLike) && s.target) carLL = s.target.curb;
   layers.car.setLatLng(carLL);
+  // 차 화면의 내 차 커서(흰 원 + 파란 화살표)를 진행 방향으로 돌린다(정북 0 · 시계 방향). 전에는 늘 위를 봐서 대각선 경로에서 어긋나 보였다. 네이티브 지도(TmapCarMap)와 같은 값
+  if (mode === 'car') { const hd = Number(s.carPos.heading); document.querySelectorAll('.mk-cur svg').forEach(el => { el.style.transform = Number.isFinite(hd) ? `rotate(${((hd % 360) + 360) % 360}deg)` : ''; }); }
   const target = pick[0];
   const focus = [];
   if (target) focus.push(target.curb);

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 연구 기록(경고 반응 로그) 내보내기: 앱 내부 files/study/ 만 공유 시트에 연다 -->
+<paths>
+    <files-path name="study" path="study/" />
+</paths>

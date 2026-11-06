@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-reset.request",
+  "title": "POST /api/road/reset 요청",
+  "description": "도로를 비운다(시연·대조용). 본문은 JSON 객체면 된다(보통 {}). clockGuard false 는 시계 오차 가드(ADR-43)를 끈다 — 논리 시각을 건너뛰는 대조 대본용.",
+  "type": "object",
+  "properties": {
+    "clockGuard": {"type": ["boolean", "null"], "description": "기본 true. false = 요청 t 를 그대로 믿는다(시연·실차는 늘 true)"}
+  }
+}

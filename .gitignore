@@ -26,3 +26,5 @@ docs/elicit/review-raw/
 server/link/sim/data/gyeongbu_speed.csv.gz
 server/link/sim/results/pc_partial/
 server/link/sim/results/queue_matched.jsonl
+
+server/link/sim/data/its_event/

@@ -1,6 +1,6 @@
 package ai.meeos.tago.emergency
 
-import ai.meeos.tago.BuildConfig
+import ai.meeos.tago.app.Edition
 import ai.meeos.tago.R
 import ai.meeos.tago.app.Services
 import ai.meeos.tago.pickup.PickupController
@@ -22,7 +22,7 @@ class EmergencyController(private val s: Services, private val pickup: PickupCon
     private val t get() = s.texts
 
     fun start() {
-        if (!BuildConfig.EMERGENCY || active) return
+        if (!Edition.emergency || active) return
         startedAt = System.currentTimeMillis()
         s.dialog.cancel()
         s.car.readAllSeatOccupancy { seats -> showCard(seats.values.count { it }) }

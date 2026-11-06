@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-world.response",
+  "title": "GET /api/road/world 200 응답(3D 관제)",
+  "description": "world.hazards 는 그림용 요약이라 DENM 필드를 싣지 않는다(위험의 DENM 필드는 view.hazards).",
+  "type": "object",
+  "required": ["api", "now", "cars", "hazards", "pulses", "ems", "s0", "scale"],
+  "properties": {
+    "api": {"$ref": "urn:meeos:gilbeot-road:1:road-common#/$defs/api"},
+    "now": {"type": "number"},
+    "cars": {
+      "type": "array",
+      "items": {"type": "object", "required": ["id", "s", "kmh", "rain", "me"],
+                "properties": {"id": {"type": "string"}, "s": {"type": "number"}, "kmh": {"type": "number"}, "rain": {"type": "boolean"}, "me": {"type": "boolean"}}}
+    },
+    "hazards": {
+      "type": "array",
+      "items": {"type": "object", "required": ["id", "type", "s", "cars", "confirmed"],
+                "properties": {"id": {"type": "string"}, "type": {"type": "string"}, "s": {"type": "number"}, "cars": {"type": "integer"}, "confirmed": {"type": "boolean"}}}
+    },
+    "pulses": {"type": "array"},
+    "ems": {},
+    "s0": {"type": ["number", "null"]},
+    "scale": {"type": "number"}
+  }
+}

@@ -14,7 +14,7 @@ class Question(
     val onAnswer: ((Boolean) -> Unit)? = null,
     val onText: ((String) -> Unit)? = null,
 ) {
-    enum class Kind { POINT, ROUTINE, REST, PARKING, DRIVETHRU, ORDER_TEXT, ORDER_CONFIRM, CRASH }   // CRASH: 충돌 뒤 "괜찮으세요?"
+    enum class Kind { POINT, ROUTINE, REST, PARKING, DRIVETHRU, ORDER_TEXT, ORDER_CONFIRM, CRASH, CHARGER }   // CRASH: 충돌 뒤 "괜찮으세요?", CHARGER: 꽂고 90초 충전 없음 "충전기 고장인가요?"
 }
 
 /** 한 번에 한 질문만. 질문을 말한 뒤(VoiceAssistant.shouldListen) 듣고, 답을 받으면 칩을 감추고 듣기를 멈춘다 */

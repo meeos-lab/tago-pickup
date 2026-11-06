@@ -12,6 +12,7 @@ Tago 시연에 쓴 지도·공공데이터와 출처 표시 의무를 정리한�
 | 역 화장실(대치역) | `server/daechi_map.json` toilets | 서울교통공사 「역사공중화장실정보」(2026-02-12), 공공데이터포털 15044453 | 이용허락범위 제한 없음. 좌표 오류가 있어 위치는 OSM 출입구 사용 |
 | 방범 시설 26곳(보안등·안심벨·CCTV·112 안내) | `server/daechi_map.json` safety | 서울특별시 「안심귀갓길 안전시설물 통합데이터」(2023), 서울 열린데이터광장 OA-21696 | 공공누리 제1유형 |
 | 해외 동네 지도(어바인·마컴·구루그람): 도로, 횡단보도, 신호, 정지표지, 버스정류장, 소화전, 학교, 상점, 주차장, 화장실, 드라이브스루, 가로등, 감시카메라 | `server/global/*_map.json` | © OpenStreetMap contributors (`server/global/fetch_city_osm.py`) | ODbL 1.0 |
+| 고속도로 휴게소 전기차 충전소 9곳 좌표(충전소 단위)·충전기 목록 — 길벗 충전기 고장 신고의 충전소 반경 · 충전기 상태(stat, `server/link/fetch_ev_status.py` 가 허브에 올림) | `server/link/gyeongbu_route.json` evStations (`server/link/fetch_ev_stations.py`, 2026-11-06) | 한국환경공단 「전기자동차 충전소 정보」, 공공데이터포털 15076352(개발계정) | 공공누리 제1유형(출처표시) |
 | 지도 아이콘 ORBIT 24종 | `server/icons/orbit` → 웹 SVG·안드로이드 벡터 | 팀 제공 원본 심볼 세트 | 팀 자산 |
 | 지도 타일 | 웹 화면(`server/rider.html`) | © OpenStreetMap contributors, tile.openstreetmap.org | OSM 타일 이용 정책 — 시연 트래픽 한정. 서비스 단계에서는 상용 타일로 교체 |
 | 지도 라이브러리 | 웹 화면 | Leaflet 1.9.4 (unpkg CDN) | BSD-2-Clause |

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:meeos:gilbeot-road:1:road-state.request",
+  "title": "POST /api/road/state 요청",
+  "description": "차·휴대폰·구급차 비컨의 상태 보고. 차는 s(경로상 거리), 휴대폰은 lat+lon 을 보낸다. t 가 없으면 허브 시계를 그대로 둔다(휴대폰 페이지 link.html 은 t 를 보내지 않는다).",
+  "type": "object",
+  "required": ["me"],
+  "properties": {
+    "me": {"type": "string", "minLength": 1, "maxLength": 64, "description": "join 이 준 차량 id"},
+    "t": {"type": "number", "minimum": 0, "description": "논리 시각(epoch 초)"},
+    "s": {"type": ["number", "null"], "minimum": -1000000, "maximum": 1000000, "description": "m, 시연 경로상 거리"},
+    "lat": {"type": ["number", "null"], "minimum": -90, "maximum": 90},
+    "lon": {"type": ["number", "null"], "minimum": -180, "maximum": 180},
+    "speed": {"type": ["number", "null"], "minimum": -100, "maximum": 150, "description": "m/s. 후진은 음수일 수 있다(VHAL PERF_VEHICLE_SPEED). 휴대폰 GPS 는 null 일 수 있다"},
+    "wiper": {"type": ["string", "null"], "maxLength": 64},
+    "temp": {"type": ["number", "null"], "minimum": -80, "maximum": 80, "description": "외기 °C"},
+    "soc": {"type": ["number", "null"], "minimum": 0, "maximum": 100, "description": "배터리 %"},
+    "on": {"type": ["boolean", "null"], "description": "구급차 비컨(kind ev): 출동 중"},
+    "dest_s": {"type": ["number", "null"], "minimum": -1000000, "maximum": 1000000, "description": "구급차 비컨: 목적지의 경로상 거리(m)"},
+    "limit": {"type": ["number", "null"], "minimum": 0, "maximum": 300, "description": "km/h, 순정 내비의 현재 도로 제한속도(NaviHelper onCurrentRoadSpeedLimit). 허브는 0 < limit ≤ 200 만 쓰고 정체 꼬리 권고 속도를 이 값으로 상한한다(ADR-44)"}
+  }
+}

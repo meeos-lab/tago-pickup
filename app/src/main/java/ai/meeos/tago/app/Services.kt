@@ -18,10 +18,12 @@ class Services(
     val voice: VoiceAssistant,
     val navi: NaviBridge,
     val dialog: Dialog,
-    val demoHooks: Boolean,
 ) {
     var region: Region = Region.DAECHI
     val lang: String get() = region.lang
+    /** 지역 프로필(assets regions/<id>.json)의 거리 단위 "km"·"mi"(어바인만 mi). MainActivity 가 자산 읽기를 잇는다; 없으면 km */
+    var regionUnits: (String) -> String = { "km" }
+    val units: String get() = regionUnits(region.id)
 
     /** 화면을 다시 그리라는 신호(AppController 가 잇는다) */
     var render: () -> Unit = {}

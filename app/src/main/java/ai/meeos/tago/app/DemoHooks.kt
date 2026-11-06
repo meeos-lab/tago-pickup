@@ -11,7 +11,7 @@ import java.io.File
  *
  *   adb shell am start -n ai.meeos.tago/.MainActivity --es utterance "응"      인식된 말 넣기(에뮬레이터에 마이크가 없어서)
  *   --es region irvine · --ez belt_sim true · --ez convoy_sim true · --ez navi_all true · --ez routine_test true
- *   --es siren_wav test.wav   앱 외부 저장소(files/)의 16kHz 모노 wav 를 마이크 대신 흘려 넣는다(이름만, 경로·URL 불가)
+ *   --es siren_wav test.wav   앱 외부 저장소(files/, 없으면 내부 files/)의 16kHz 모노 wav 를 마이크 대신 흘려 넣는다(이름만, 경로·URL 불가)
  *   --es say_test "문장" · --es tone_test nav|media   음성 경로 진단
  */
 object DemoHooks {
@@ -31,28 +31,43 @@ object DemoHooks {
         if (intent.getBooleanExtra("probe_signals", false)) s.car.probeSignals()   // 설계 실측: 속도 콜백 주기·에어백 읽기
         // 사고 판단 시연: impact_sim "25,0"(충돌 표본), airbag_sim true(에어백 전개 — 에뮬레이터 VHAL 미지원), comm_sim true(보고 중단 = 통신 끊김)
         intent.getStringExtra("impact_sim")?.let { app.road.simImpact(it) }
+        // 순정 내비 돌발 정보 흉내 "ACCIDENT,2000"(에뮬레이터 내비는 성남 고정이라 경부선 돌발이 오지 않는다)
         intent.getStringExtra("official_sim")?.let { app.road.simOfficial(it) }
         // 운전 묶음 흉내 "SPEEDING,BRAKES,FATIGUE" | "off"(사고 위험성 시연 — 과속 20초·급제동 두 번·2시간 운전을 기다리지 않게)
         intent.getStringExtra("risk_sim")?.let { v -> app.road.driveRisk.sim = if (v.trim() == "off") emptySet() else v.split(",").map { it.trim().uppercase() }.filter { it in DriveRisk.TAGS }.toSet(); s.log.d("운전 위험 시연 ${app.road.driveRisk.sim}") }
         // 외기 온도 흉내 "-2" | "off"(교량 결빙 주의 시연 — Virtual Console 에 외기 온도 조절이 없다)
-        intent.getStringExtra("temp_sim")?.let { v -> s.car.simTemp = if (v.trim() == "off") null else v.trim().toFloatOrNull(); s.log.d("외기 온도 시연 ${s.car.simTemp}") }   // 순정 내비 돌발 정보 흉내 "ACCIDENT,2000"(에뮬레이터 내비는 성남 고정이라 경부선 돌발이 오지 않는다)
+        intent.getStringExtra("temp_sim")?.let { v -> s.car.simTemp = if (v.trim() == "off") null else v.trim().toFloatOrNull(); s.log.d("외기 온도 시연 ${s.car.simTemp}") }
         if (intent.hasExtra("airbag_sim")) s.car.airbagSim = intent.getBooleanExtra("airbag_sim", false)
         if (intent.hasExtra("comm_sim")) { app.road.commSim = intent.getBooleanExtra("comm_sim", false); s.log.d("통신 끊김 시연 ${app.road.commSim}") }
         // 충전 시연: --es ev_sim "port=1,charge=0,soc=40" (에뮬레이터 Virtual Console 은 충전 상태 조작이 없다), "off" 면 실제 신호로
         intent.getStringExtra("ev_sim")?.let { spec ->
-            val kv = spec.split(",").mapNotNull { it.trim().split("=").takeIf { p -> p.size == 2 }?.let { p -> p[0].trim() to p[1].trim() } }.toMap()
+            val kv = parseKv(spec)
             val car = s.car
             if (spec.trim() == "off") { car.simChargePort = null; car.simCharging = null; car.simSoc = null }
             else { kv["port"]?.let { car.simChargePort = it == "1" }; kv["charge"]?.let { car.simCharging = it == "1" }; kv["soc"]?.toIntOrNull()?.let { car.simSoc = it } }
+            kv["move"]?.toDoubleOrNull()?.let { app.road.demoMove(it) }   // 휴게소 안에서 자리 옮김(m)
             s.log.d("충전 시연: 충전구 ${car.chargePort} 충전 ${car.charging} 배터리 ${car.soc}%")
         }
         if (intent.hasExtra("link_offset")) { app.road.startOffset = intent.getIntExtra("link_offset", 0).toDouble(); s.log.d("도로 링크 출발 간격 ${app.road.startOffset}m") }
+        // 연구 기록 검증: --es study_sim "age=30s,years=8,car=sedan"(동의 화면 없이 세션 시작, 머리 줄 consent_source=demo_hook) · --ez study_off true · --ez study_export true
+        intent.getStringExtra("study_sim")?.let { spec ->
+            val kv = parseKv(spec)
+            app.studyDemo(kv["age"] ?: "", kv["years"]?.toIntOrNull() ?: 0, kv["car"] ?: "")
+        }
+        if (intent.getBooleanExtra("study_off", false)) app.studyStop()
+        // 접근 경고음 시험: --es sim_kmh "100"(시연 주행이 권장 속도를 따르지 않고 이 속도로) · "off"
+        // 경고음 들어 보기: --es beep_test 1|2|3|pass(바로 한 번 울림)·loop(3단계 고리 4초) · --ez beep_wav true(네 소리를 앱 files/ 에 WAV 로)
+        intent.getStringExtra("beep_test")?.let { v -> if (v == "pass") app.road.beepTest(ai.meeos.tago.road.ApproachBeep.PASSED) else if (v == "loop") app.road.beepTest(ai.meeos.tago.road.ApproachBeep.LOOP3) else v.toIntOrNull()?.takeIf { it in 1..3 }?.let { app.road.beepTest(it) } }
+        if (intent.getBooleanExtra("beep_wav", false)) app.road.beepWavs(activity.filesDir)
+        intent.getStringExtra("sim_kmh")?.let { v -> app.road.simTargetKmh = if (v.trim() == "off") null else v.trim().toFloatOrNull(); s.log.d("시연 주행 고정 속도 ${app.road.simTargetKmh}") }
+        if (intent.getBooleanExtra("study_export", false)) (activity as? ai.meeos.tago.MainActivity)?.exportStudy()
         if (intent.getBooleanExtra("road_start", false)) app.startRoad()
         if (intent.getBooleanExtra("group_start", false)) s.main.postDelayed({ app.roadPrimary() }, 1500)   // 앞차: 가족 그룹 만들기(코드는 로그·음성)
         intent.getStringExtra("link_code")?.let { code -> s.main.postDelayed({ app.road.joinGroup(code.take(8)) }, 1500) }
         intent.getStringExtra("siren_wav")?.let { name ->
             if (!SAFE_NAME.matches(name)) { s.log.d("사이렌 시험 파일 이름이 올바르지 않음"); return@let }
-            val f = File(activity.getExternalFilesDir(null), name)
+            // 외부 저장소 → 없으면 앱 내부 files/(에뮬레이터가 사용자 10 으로 돌면 adb 가 외부 저장소에 못 쓴다: `adb exec-in run-as <패키지> --user 10 sh -c 'cat > files/<파일>'`)
+            val f = File(activity.getExternalFilesDir(null), name).takeIf { it.exists() } ?: File(activity.filesDir, name)
             if (f.exists()) app.road.sirenWav = f else s.log.d("사이렌 시험 파일 없음: ${f.path}")
         }
         if (intent.getBooleanExtra("routine_test", false)) s.main.postDelayed({ app.routine.prompt(app.routine.routines.first()) }, 2500)
@@ -74,4 +89,8 @@ object DemoHooks {
             }.onFailure { s.log.d("톤 테스트 실패: ${it.message}") }
         }.start()
     }
+
+    /** "a=1,b=2" → {a:1, b:2}. '=' 이 정확히 하나가 아닌 조각은 버린다 */
+    private fun parseKv(spec: String): Map<String, String> =
+        spec.split(",").mapNotNull { it.trim().split("=").takeIf { p -> p.size == 2 }?.let { p -> p[0].trim() to p[1].trim() } }.toMap()
 }
