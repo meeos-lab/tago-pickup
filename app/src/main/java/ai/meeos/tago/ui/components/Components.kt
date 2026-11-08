@@ -48,6 +48,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalSoundEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.SoundEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import android.view.HapticFeedbackConstants
+import android.view.View
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import kotlinx.coroutines.withTimeoutOrNull
@@ -58,6 +64,37 @@ import kotlinx.coroutines.withTimeoutOrNull
  */
 
 enum class ButtonVariant { PRIMARY, SECONDARY, DANGER, DANGER_OUTLINE }
+
+/**
+ * 누름 피드백(소리 + 햅틱). Compose foundation(1.12)의 clickable 은 누를 때마다 LocalSoundEffect.playClickSound() 를 부르고,
+ * 기본 구현이 View.playSoundEffect(CLICK) = 시스템 키 클릭(AudioManager FX_KEY_CLICK)을 낸다. 시스템 '터치 시 소리' 설정이
+ * 꺼져 있으면 AudioManager 가 내지 않는다. 그래서 소리를 따로 내지 않고(직접 내면 한 번 누름에 딸깍이 두 번 — 11-08 에뮬레이터
+ * 오디오 서버 트랙 수로 확인) 그 자리를 감싼다. 음원 파일은 넣지 않는다(순정 톤, 권리 문제 없음).
+ * - 햅틱: 같은 자리에서 performHapticFeedback(VIRTUAL_KEY) — 시스템 '터치 시 진동' 설정을 따른다. 진동기가 없는 차에서는 아무 일도 없다.
+ * - 결정(11-08): 앱 안내 음성(TTS)이 나오는 동안에는 소리를 생략하고 햅틱만 낸다. 위험·경유·합류 안내 문장의 첫 음절을
+ *   딸깍 소리가 가리지 않게 하려는 것. 눌림 축소(80 ms)와 햅틱이 남아 피드백은 여전히 둘 이상이다.
+ *   Gleo·내비 같은 다른 앱 음성은 읽지 않는다(재생 중 판단에 다른 앱 재생 목록을 뒤지지 않음).
+ * - 범위: clickable 을 쓰는 모든 요소(버튼·답 칩·가족 목록·세그먼트·충전 설문 타일). 꺼진 버튼과 빈 곳은 Compose 가 부르지 않는다.
+ *   연타 막기(debounced)로 버린 두 번째 누름에도 Compose 는 소리를 부른다 — 눌림을 받았다는 표시일 뿐, 동작은 한 번이다.
+ */
+class PressFeedback(private val view: View, private val delegate: SoundEffect) : SoundEffect {
+    override fun playClickSound() {
+        val sound = !ai.meeos.tago.voice.SpeechState.speaking
+        if (sound) delegate.playClickSound()
+        val haptic = view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        // 시연·디버그 빌드에서만: 에뮬레이터 검증(오디오 서버 트랙·진동 기록과 대조)용 한 줄. 제품 빌드에는 없다
+        if (ai.meeos.tago.BuildConfig.DEMO_HOOKS) android.util.Log.d(ai.meeos.tago.app.AppLog.TAG, "누름 피드백: 소리 ${if (sound) "냄" else "생략(안내 음성 중)"} · 햅틱 $haptic")
+    }
+}
+
+/** 앱 맨 위(MainActivity setContent)에서 한 번 감싼다 — 그 아래 모든 clickable 의 클릭 소리 자리가 PressFeedback 이 된다 */
+@Composable
+fun PressFeedbackScope(content: @Composable () -> Unit) {
+    val view = LocalView.current
+    val base = LocalSoundEffect.current
+    val feedback = remember(view, base) { PressFeedback(view, base) }
+    CompositionLocalProvider(LocalSoundEffect provides feedback, content = content)
+}
 
 /** 연타 막기: 0.8초 안의 두 번째 누름은 버린다(흔들리는 차에서 두 번 눌려 요청·안내가 두 번 가지 않게) */
 @Composable

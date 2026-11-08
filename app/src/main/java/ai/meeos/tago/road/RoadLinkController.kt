@@ -33,6 +33,19 @@ class RoadLinkController(private val context: Context, private val s: Services, 
 
     private var linkS = 0.0                                 // 경로 위 내 위치(시연 경로 경부고속도로 하행)
     private val spoken = mutableMapOf<String, Int>()        // 위험 id → 말한 단계(차가 3대 이상 확인되면 한 번 더)
+    private val detourSaid = mutableSetOf<String>()          // 우회 안내 id(= 막힘 위험 id) — 같은 막힘에 한 번만 말한다
+    private val detourSeen = mutableMapOf<String, Long>()    // 우회 안내 id → 보기에서 처음 본 시각(발화 지연 기록, DETOUR_DELAY_S)
+    // 우회 권고 수락(FR-G-36 확장): 준수 점수는 이 기기 안에만(DetourComply) — 허브에는 수락·거절만, 연구 기록에는 넣지 않는다
+    private val comply by lazy { DetourComply.load(context) }
+    private val detourDecided = mutableMapOf<String, Boolean>()   // 막힘 id → 수락(true)·거절(false). 본선 유지(stay) 배정은 넣지 않는다
+    private var pendingAck: JSONObject? = null                     // 다음 상태 보고에 실을 detourAck
+    private var judging: Pair<String, Double>? = null              // (막힘 id, 권고 때 다음 나들목의 s) — 따랐는지 판정 중
+    // 경로 이탈(휴게소 진입 등) — 차 안에서 GPS 와 경로 선으로 판정해 offRoute 불리언만 보낸다(위경도는 보내지 않는다)
+    private val routeGeo by lazy { runCatching { LinkHub(context.assets.open("link/gyeongbu_route.json").use { String(it.readBytes(), Charsets.UTF_8) }) }.getOrNull() }
+    private val offRoute by lazy { OffRouteSensor(context, s.log) { lat, lon -> routeGeo?.lateral(lat, lon) ?: Double.NaN } }
+    /** 위치 권한 요청(MainActivity 가 채운다). 함께 가기 시작 때 권한이 없으면 이유를 먼저 보이고 한 번만 묻는다 — 거부하면 offRoute 를 보내지 않는다(이전 규칙) */
+    var requestLocation: (() -> Unit)? = null
+    private var locationAsked = false
     private var restKey = ""                                // 이미 물은/알린 휴게소 제안
     private var briefed = false
     private var prevSpeed = 0f
@@ -138,10 +151,12 @@ class RoadLinkController(private val context: Context, private val s: Services, 
                 JSONObject(s.api.http("POST", "/api/road/join", body.toString()))
             }.onSuccess { r -> s.main.post {
                 convoy = JSONObject().put("me", r.getString("me"))
-                linkS = LINK_START + startOffset; spoken.clear(); restKey = ""; briefed = false; rainReported = false; demoCalled = false
+                linkS = LINK_START + startOffset; spoken.clear(); detourSaid.clear(); detourSeen.clear(); detourDecided.clear(); pendingAck = null; judging = null; restKey = ""; briefed = false; rainReported = false; demoCalled = false
                 advSaid = false; jamWatch = false; rainSaid.clear(); zoneSaid.clear(); simV = 25f
                 driveRisk.reset(); riskSaidAt = 0L; fatigueSaidAt = 0L; lastSayAt = System.currentTimeMillis()
                 car.readRoadSignals = true
+                if (context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED) offRoute.start()   // 경로 이탈 판정
+                else if (!locationAsked && requestLocation != null) { locationAsked = true; s.toast(t[R.string.toast_location_why]); requestLocation?.invoke() }
                 car.setTurnSignalWatch(true)                 // 길 터 주기(YIELD): 오른쪽 깜빡이
                 car.onImpact = { pre, nowV, samples -> onImpact(pre, nowV, samples) }
                 car.setFastSpeed(true)
@@ -212,6 +227,32 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         else s.say(t[R.string.say_rest_skip])
     }
 
+    /** 위치 권한 결과(MainActivity.onRequestPermissionsResult): 허용이고 함께 가기 중이면 경로 이탈 판정을 켠다 */
+    fun onLocationPermission() { if (active) offRoute.start() }
+
+    /** 화면 [우회 안내] 글. 허브 보기에 detour 가 없거나(막힘 해제·나들목 1 km 안) 이 차가 수락하지 않았으면(본선 유지 배정·거절) null = 버튼 없음 */
+    fun detourLabel(): String? = view?.optJSONObject("detour")?.takeIf { detourDecided[it.optString("id")] == true }?.let { t[R.string.btn_detour] }
+
+    /** 우회를 따랐는지 스스로 판정해 준수 점수를 고친다: 보기 offRoute 가 true 면 따름, false 인데 그 나들목을 OFFICIAL_OFFROUTE 넘게 지났으면 안 따름.
+     *  offRoute 가 null(위경도를 보내지 않음)이면 판정을 미룬다 — 모르는 것을 '안 따름'으로 세지 않는다 */
+    private fun judgeDetour(v: JSONObject) {
+        val (_, icS) = judging ?: return
+        if (!v.has("offRoute") || v.isNull("offRoute")) return
+        if (v.getBoolean("offRoute")) {
+            comply.follow(); DetourComply.save(context, comply); judging = null
+            s.log.demo("우회 따름 — 준수 점수 ${"%.2f".format(comply.score)}"); return
+        }
+        if (!v.isNull("s") && v.getDouble("s") >= icS + LinkHub.OFFICIAL_OFFROUTE) {
+            judging = null; s.log.demo("우회 안 따름(나들목을 지나도 본선) — 준수 점수 ${"%.2f".format(comply.score)}")
+        }
+    }
+
+    /** [우회 안내]를 눌렀을 때만 순정 내비에 요청한다(자동 경로 변경 없음): 안내 중이면 재탐색, 아니면 다음 나들목을 목적지로 */
+    fun requestDetour() {
+        val d = view?.optJSONObject("detour") ?: return
+        s.navi.detour(d.getDouble("lat"), d.getDouble("lon"), t[R.string.btn_detour])
+    }
+
     /** 휴게소를 순정 내비 목적지로(국내 경로라 지역 설정과 무관하게 요청) */
     private fun naviToRest(r: JSONObject) {
         val pos = r.optJSONArray("pos") ?: return
@@ -223,6 +264,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         s.dialog.cancel()
         sirenMic.stop(); sirenHeard = false; sirenFile = false
         car.readRoadSignals = false
+        offRoute.stop()
         if (study?.active != true) car.setTurnSignalWatch(false)   // 연구 기록 중이면 그쪽이 계속 쓴다
         car.setFastSpeed(false); car.onImpact = null
         s.navi.onTrafficEvents = null
@@ -301,6 +343,8 @@ class RoadLinkController(private val context: Context, private val s: Services, 
 
     private fun state() = JSONObject().put("t", s.epoch()).put("s", linkS).put("speed", car.speedMs.toDouble()).put("wiper", car.wiper)
         .also { b -> car.outsideTemp?.let { b.put("temp", it.toDouble()) }; s.navi.speedLimitKmh?.let { b.put("limit", it) } }   // limit: 순정 내비 제한속도(km/h), 모르면 안 보냄
+        .also { b -> pendingAck?.let { b.put("detourAck", it); pendingAck = null } }   // 우회 권고 수락·거절(점수는 보내지 않는다)
+        .also { b -> if (!simDrive) offRoute.offRoute()?.let { b.put("offRoute", it) } }   // 경로 이탈 불리언만(시연 주행 중에는 GPS 가 경로 위치와 무관해 보내지 않는다)
 
     /** 도로 링크 요청(state·event·demo) — 응답은 내 차 기준 보기 */
     private fun post(path: String, body: JSONObject) {
@@ -670,6 +714,36 @@ class RoadLinkController(private val context: Context, private val s: Services, 
         // ② 조용할 때만 = 나머지 위험(종류별 행동 거리 안)·권장 속도·비 예보·교량 결빙·위험성 — 도로 시간 30초에 한 문장
         // ③ 화면에만 = 행동 거리 밖의 위험, 사고 다발 구간, 위험성 '주의'
         val hz = v.optJSONArray("hazards")
+        // 최소 우회 안내(FR-G-36, 11-08 통합 기준): 막힘 확정 뒤 DETOUR_DELAY_S 안에 말해야 하므로 말 예산과 무관하게 바로 — 아직 안 말한
+        // 긴급차량 문장만 앞선다. 같은 막힘(id)에 한 번. 문장에 나들목 이름이 없다(어느 나들목으로 나갈지는 순정 내비 재탐색)
+        judgeDetour(v)
+        val dv = v.optJSONObject("detour")
+        if (dv != null && dv.optString("assign") == "detour" && dv.getString("id") !in detourDecided) {
+            // 허브가 우회에 배정한 차: 준수 점수 c 와 허브의 비율 p 로 수락(c ≥ 1 − p). 거절이면 본선 유지 — 정체 꼬리 권고 속도(ahead.advice)는 그대로 나온다
+            val hid = dv.getString("id")
+            val p = dv.optDouble("p", LinkHub.DETOUR_P_MIN)
+            val c0 = comply.score
+            val ok = comply.receive(p)
+            DetourComply.save(context, comply)
+            detourDecided[hid] = ok
+            pendingAck = JSONObject().put("hazard", hid).put("ack", if (ok) "accepted" else "declined")
+            if (!v.isNull("s")) judging = hid to (v.getDouble("s") + dv.optInt("icDist"))
+            s.log.demo("우회 권고 ${if (ok) "수락" else "거절 — 본선 유지"}: p $p · 준수 점수 ${"%.2f".format(c0)}")   // 시연 빌드 logcat 에만
+        }
+        val detour = dv?.takeIf { it.has("say") && it.getString("id") !in detourSaid && detourDecided[it.getString("id")] == true }
+        if (detour != null) {
+            val id = detour.getString("id")
+            val seen = detourSeen.getOrPut(id) { now }
+            val sirenFirst = hz != null && (0 until hz.length()).any { i -> hz.getJSONObject(i).let { h ->
+                h.optString("type") == "SIREN" && h.has("say") && (spoken[h.getString("id")] ?: 0) < h.optInt("level", 1) } }
+            if (!sirenFirst) {
+                detourSaid += id
+                val lag = now - seen
+                s.log.demo("우회 안내: 막힘 ${detour.optInt("inc")}m ${detour.optString("reason")} · 다음 나들목 ${detour.optInt("icDist")}m · 보기 수신 뒤 ${lag}ms" +
+                    if (lag > LinkHub.DETOUR_DELAY_S * 1000) " (상한 ${LinkHub.DETOUR_DELAY_S}s 넘음)" else "")
+                speak(detour.getString("say"), now); return
+            }
+        }
         var normal: JSONObject? = null
         if (hz != null) for (i in 0 until hz.length()) {
             val h = hz.getJSONObject(i)

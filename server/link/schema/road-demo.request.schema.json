@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:meeos:gilbeot-road:1:road-demo.request",
   "title": "POST /api/road/demo 요청",
-  "description": "시연 도로(모르는 Tago 차 14대·시연 구급차) 시작. ems = 시연 구급차 근거(mic·all·yield, 그 밖은 기본).",
+  "description": "시연 도로(모르는 차 14대·시연 구급차) 시작. ems = 시연 구급차 근거(mic·all·yield, 그 밖은 기본).",
   "type": "object",
   "required": ["me"],
   "properties": {

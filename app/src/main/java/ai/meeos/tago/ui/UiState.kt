@@ -39,7 +39,8 @@ sealed interface Panel {
 
     /** 함께 가기: 앞길 스트립(내 차·위험·일행·휴게소) + [가족 차 묶기 / 다같이 휴게소] [끝내기] */
     data class RoadLink(val strip: RoadStripUi?, val connecting: String?, val primaryLabel: String, val primaryIcon: Int, val endLabel: String, val showButtons: Boolean,
-                        val chargeLabel: String? = null) : Panel   // chargeLabel: 휴게소·충전 정차 중 [충전기 고장 신고]
+                        val chargeLabel: String? = null,   // chargeLabel: 휴게소·충전 정차 중 [충전기 고장 신고]
+                        val detourLabel: String? = null) : Panel   // detourLabel: 최소 우회 안내 중 [우회 안내](FR-G-36)
 
     /** 충전기 고장 신고 1분 설문: 한 화면에 한 문항(그림 타일) + [이전] [모름·건너뛰기] [닫기]. 정차 중에만 */
     data class ChargeReport(val ui: ChargeReportUi) : Panel

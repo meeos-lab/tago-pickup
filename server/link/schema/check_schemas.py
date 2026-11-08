@@ -1,4 +1,4 @@
-"""도로 링크 스키마 점검(gilbeot-road/1).
+"""링크 스키마 점검(gilbeot-road/1).
 
 1. 모든 *.schema.json 이 JSON Schema 2020-12 로 올바른지(메타 스키마 검사).
 2. 요청 스키마(*.request·*.query)가 허브 검사기(link_server.schema_error = LinkHub.schemaError)가 아는 키워드만 쓰는지 —

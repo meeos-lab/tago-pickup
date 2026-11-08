@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:meeos:gilbeot-road:1:road-common",
-  "title": "길벗 도로 링크 응답 공통 정의(gilbeot-road/1)",
+  "title": "링크 응답 공통 정의(gilbeot-road/1)",
   "description": "응답 스키마가 $ref 로 쓰는 조각. 응답은 확장에 열려 있다(additionalProperties 허용 — 새 필드를 더해도 옛 받는 쪽이 깨지지 않게). 필드 뜻은 docs/dev/51-api-spec.md 2.3·10절.",
   "$defs": {
     "api": {"const": "gilbeot-road/1", "description": "API 버전. 호환되는 더하기는 같은 값, 깨지는 변경은 /2"},
@@ -49,7 +49,7 @@
     },
     "view": {
       "type": "object",
-      "required": ["me", "lang", "now", "s", "routeLength", "risk", "nearby", "hazards", "zones", "ahead", "restNext", "restHere", "group", "brief", "demo", "clockSkew", "units"],
+      "required": ["me", "lang", "now", "s", "routeLength", "risk", "nearby", "hazards", "zones", "ahead", "restNext", "restHere", "group", "brief", "demo", "clockSkew", "units", "detour", "offRoute"],
       "properties": {
         "me": {"type": ["string", "null"]},
         "lang": {"enum": ["ko", "en"]},
@@ -68,7 +68,23 @@
         "demo": {"type": "boolean"},
         "clockSkew": {"type": ["integer", "null"], "description": "초. 이 차의 요청 t 가 허브 수신 시각 기준으로 CLOCK_SKEW_SEC(30) 넘게 어긋났을 때 그 차이(앞서면 양수). 없으면 null(ADR-43)"},
         "units": {"enum": ["km", "mi"], "description": "이 차의 거리 단위(join units). 영어 거리 글에만 쓴다(ADR-45)"},
-        "ev": {"type": "object"}
+        "ev": {"type": "object"},
+        "offRoute": {"type": ["boolean", "null"], "description": "내 마지막 위경도(state lat/lon)가 경로에서 OFFICIAL_OFFROUTE(1 km) 넘게 떨어졌나. 위경도를 보낸 적 없으면 null — 차가 우회를 따랐는지 스스로 판정할 때 쓴다"},
+        "detour": {"type": ["object", "null"], "description": "최소 우회 안내(FR-G-36, 11-08 통합 기준 = 시뮬레이션 detour_rules.py). 앞 10 km(DETOUR_MAX_INC_M) 안 확정 막힘(사고 의심·정체) 상류이고 다음 나들목까지 1 km(DETOUR_MIN_IC_M) 이상이고 그 나들목이 막힘 앞이면 객체, 아니면 null. 막힘 확정이 풀리면 거둔다(공식 종료 = 사고 의심 해제라 처리 종료 + 300 s 보다 늘 먼저). 앱은 say 를 바로(예산 무관) 한 번 말하고 [우회 안내]를 누를 때만 순정 내비 재탐색",
+          "required": ["id", "hazard", "inc", "reason", "ic", "icDist", "lat", "lon", "p", "assign", "ack", "say"],
+          "properties": {
+            "id": {"type": "string", "description": "막힘 위험 id — 같은 막힘에 한 번만 말한다"},
+            "hazard": {"type": "string", "description": "막힘 위험 id(hazards[].id)"},
+            "inc": {"type": "integer", "exclusiveMinimum": 0, "maximum": 10000, "description": "막힘까지 m"},
+            "reason": {"enum": ["INCIDENT", "JAM"]},
+            "ic": {"type": "string", "description": "다음 나들목 경로 파일 junctions[].id(앱이 경로 안내 중이 아닐 때만 목적지로 쓴다)"},
+            "icDist": {"type": "integer", "minimum": 1000, "description": "다음 나들목까지 m"},
+            "lat": {"type": "number"}, "lon": {"type": "number"},
+            "p": {"type": "number", "minimum": 0.2, "maximum": 0.8, "description": "허브가 정한 우회 비율(DETOUR_P_MIN~MAX)"},
+            "assign": {"enum": ["detour", "stay"], "description": "이 차의 배정 — FNV-1a32(차 id:막힘 id)/2^32 < p 이면 detour"},
+            "ack": {"enum": ["accepted", "declined", null], "description": "이 차가 보낸 답(state.detourAck), 아직 없으면 null"},
+            "say": {"type": "string", "description": "나들목 이름 없이 '전방 {d} 막힘 확정. 우회 경로를 확인하세요.'"}
+          }}
       }
     }
   }

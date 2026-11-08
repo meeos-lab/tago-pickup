@@ -1,4 +1,4 @@
-# Tago R8 규칙 — 외부 SDK 는 이름 그대로 둔다(네이티브·IPC·리플렉션이 이름으로 찾는다)
+# R8 규칙 — 외부 SDK 는 이름 그대로 둔다(네이티브·IPC·리플렉션이 이름으로 찾는다)
 
 # TMAP SDK 3.7 + 내장 VSM 2.0.14: VSM 네이티브 라이브러리(libvsmsdk_jni.so)가 JNI 로 자바 클래스·필드를 이름으로 부른다.
 # 앱도 map/TmapCarMap.kt 에서 TMapView 의 비공개 필드 vsmMapEngine 을 리플렉션으로 읽는다

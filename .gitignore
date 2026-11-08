@@ -22,9 +22,15 @@ server/link/sim/frames*.json
 server/link/sim/anim.json
 server/link/sim/page/anim3d.b64.txt
 server/link/sim/data/vds/
+server/link/sim/data/vds5/
+server/link/sim/data/road_counts/raw/
+server/link/sim/data/road_counts/tcs_corridor_hourly.csv
+server/link/sim/data/road_counts/kict_*_national_hourly_corridor.csv
 docs/elicit/review-raw/
 server/link/sim/data/gyeongbu_speed.csv.gz
 server/link/sim/results/pc_partial/
 server/link/sim/results/queue_matched.jsonl
 
 server/link/sim/data/its_event/
+server/link/sim/results/m_traj/
+server/link/sim/data/vds_volume/kict_expressway_*_hourly.csv

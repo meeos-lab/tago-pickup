@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:meeos:gilbeot-road:1:road-join.request",
   "title": "POST /api/road/join 요청",
-  "description": "도로 링크 참가. 필수 필드는 없다(이름·차 설명이 없으면 빈 글). kind \"ev\"(구급차 비컨)는 token 이 맞아야 하며 아니면 403. 글 길이는 허브가 자른다(이름 20자·차 40자·kind 12자) — 스키마는 그보다 넉넉한 상한만 둔다.",
+  "description": "링크 참가. 필수 필드는 없다(이름·차 설명이 없으면 빈 글). kind \"ev\"(구급차 비컨)는 token 이 맞아야 하며 아니면 403. 글 길이는 허브가 자른다(이름 20자·차 40자·kind 12자) — 스키마는 그보다 넉넉한 상한만 둔다.",
   "type": "object",
   "properties": {
     "t": {"type": "number", "minimum": 0},

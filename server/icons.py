@@ -1,4 +1,4 @@
-"""Tago 아이콘 — ORBIT 심볼 세트(server/icons/orbit, 사용자 제공 원본)를 한 곳에서 읽어
+"""앱 아이콘 — ORBIT 심볼 세트(server/icons/orbit, 사용자 제공 원본)를 한 곳에서 읽어
 rider.html(인라인 SVG 글리프 + 지도 핀 색)과 안드로이드 VectorDrawable(res/drawable/ic_*.xml)을 만든다.
 
 ORBIT: 24개 단색 실루엣. icons/ = 투명 배경 글리프(viewBox -1 -1 26 26), markers/ = 물방울 핀(48×48, 끝점 [24,42]),
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     block = ("/* ICONS:BEGIN (server/icons.py가 ORBIT 심볼에서 씀) */\nconst ICONS = {\n"
              + "".join(f"  {n}: '{svg_inner(e)}',\n" for n, e in icons.items())
              + "};\nconst ICON_COLORS = {" + ", ".join(f"{n}: '{c}'" for n, c in colors.items()) + "};\n/* ICONS:END */")
-    for page in (os.path.join(HERE, "rider.html"), os.path.join(HERE, "link", "link.html")):   # 픽업 페이지 + 함께 가기 페이지
+    for page in (os.path.join(HERE, "rider.html"), os.path.join(HERE, "link", "link.html")):   # 휴대폰 웹 페이지 두 개
         s = Path(page).read_text(encoding="utf-8")
         s, n = re.subn(r"/\* ICONS:BEGIN.*?/\* ICONS:END \*/", lambda m: block, s, flags=re.S)
         assert n == 1, f"{page}에 ICONS 블록 표시가 없다"

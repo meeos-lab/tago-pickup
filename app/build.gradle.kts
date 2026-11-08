@@ -132,7 +132,8 @@ android {
             signingConfig = signingConfigs.getByName("release")
             buildConfigField("boolean", "DEMO_HOOKS", demoHooks.toString())
             buildConfigField("boolean", "STUDY_LOG", studyLog.toString())
-            manifestPlaceholders["studyLocationPermission"] = if (studyLog) "android.permission.ACCESS_FINE_LOCATION" else "ai.meeos.permission.STUDY_GPS_UNUSED"
+            // 위치: 연구 빌드(차속 없는 차의 GPS 속도) 또는 길벗 판(휴게소 판정 offRoute — 차 안에서 계산, 불리언만 전송, 11-08). 픽업 판 제품 빌드는 넣지 않는다
+            manifestPlaceholders["studyLocationPermission"] = if (studyLog || !pickupOnly) "android.permission.ACCESS_FINE_LOCATION" else "ai.meeos.permission.STUDY_GPS_UNUSED"
             ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         }
         // qa: release 와 같은 최적화·축소, 디버그 키 서명 — 에뮬레이터의 debug 위에 그대로 덮어 설치해 실제 성능을 잰다(-g 설치 권한 그대로)
@@ -165,6 +166,12 @@ androidComponents {
 }
 
 tasks.named("preBuild") { dependsOn(copyMeeosAssets, copyMeeosRes) }
+
+// 에뮬레이터 없는 두 엔진 대조용 JVM 허브(app/src/test/.../LinkHubServe.kt): -Pmeeos.linkServe=<포트> 일 때만 그 시험이 허브를 연다
+tasks.withType<Test>().configureEach {
+    systemProperty("meeos.linkServe", (project.findProperty("meeos.linkServe") as String?).orEmpty())
+    if ((project.findProperty("meeos.linkServe") as String?).isNullOrEmpty().not()) outputs.upToDateWhen { false }
+}
 
 dependencies {
     // 화면: Jetpack Compose. 컴포넌트는 app/.../ui/components

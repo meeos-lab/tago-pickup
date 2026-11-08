@@ -450,6 +450,7 @@ class AppController(context: Context, val s: Services, private val onMapUrl: (St
             // 충전소(휴게소 services) 반경 500 m 안에 서 있을 때만(허브 restHere). 질문 중·주행 중·반경 밖에서는 숨김
             chargeLabel = if (BuildConfig.ROAD_LINK && s.car.stopped && q?.kind != Question.Kind.CHARGER && road.nearCharger)
                 t[R.string.btn_charger_report] else null,
+            detourLabel = if (BuildConfig.ROAD_LINK && q?.kind != Question.Kind.CHARGER) road.detourLabel() else null,
         )
     }
 

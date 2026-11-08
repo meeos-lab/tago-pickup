@@ -130,14 +130,16 @@ class MainActivity : ComponentActivity() {
             onStudyUpload = { app.studyUpload(it) },
             onStudyStop = { app.studyStop() },
             onChargeOpen = { app.road.openSurvey() },
+            onDetour = { app.road.requestDetour() },
             onChargePick = { app.road.surveyPick(it) },
             onChargeSkip = { app.road.surveySkip() },
             onChargeBack = { app.road.surveyBack() },
             onChargeClose = { app.road.surveyClose() },
         )
         app.requestGps = { runCatching { requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), REQ_STUDY_GPS) } }
+        app.road.requestLocation = { runCatching { requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION), REQ_ROAD_GPS) } }
         app.road.onCrashHelp = { app.emergency.start() }   // 충돌 뒤 무응답·[도움 필요] → 응급 카드(2차 사고 예방 모드)
-        setContent {
+        setContent { ai.meeos.tago.ui.components.PressFeedbackScope {   // 누름 소리·햅틱(ui/components/Components.kt PressFeedback)
             TagoTheme {
                 val state = uiState.value
                 // 가로↔세로 배치가 바뀌면 지도 슬롯이 다시 만들어진다 — 이미 붙어 있던 WebView 를 떼어 다시 넣는다
@@ -159,7 +161,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
+        } }
         // 액티비티가 다시 만들어질 때(프로세스 복원 등) 처음 실행 인텐트를 또 처리하면 픽업이 저절로 새로 시작된다
         if (savedInstanceState == null) handleIntent(intent)
         // CCP Back 하드키: 앱을 끝내지 않고 뒤로 숨긴다(Pleos 규칙 — 끝내면 픽업 세션·내장 서버·아이 링크가 끊긴다)
@@ -176,6 +178,7 @@ class MainActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_STUDY_GPS) app.study.refreshSensors()
+        if (requestCode == REQ_ROAD_GPS) app.road.onLocationPermission()
     }
 
     /** 연구 기록 내보내기: 쓰기 줄이 다 끝난 뒤 공유 시트(없으면 앱 외부 폴더에만 복사) */
@@ -369,5 +372,6 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val REQ_RUNTIME = 7      // 권한 요청 코드: 차 속도·마이크
         const val REQ_STUDY_GPS = 8    // 연구 기록: 차속 신호 없는 차의 GPS 속도
+        const val REQ_ROAD_GPS = 9     // 함께 가기: 휴게소 판정용 경로 이탈(차 안에서만 계산, 불리언만 전송)
     }
 }

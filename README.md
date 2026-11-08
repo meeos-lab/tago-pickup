@@ -180,7 +180,7 @@ flowchart TB
 
 **필요한 것**
 - Pleos Connect 에뮬레이터(Android Automotive 14 / API 34, x86_64)와 Virtual Console
-- 소스 빌드: JDK 17, Android SDK 35, 저장소의 Gradle Wrapper(이 저장소의 기본 빌드는 픽업 판이다: `gradle.properties` 의 `meeos.edition=pickup`)
+- 소스 빌드: JDK 17, Android SDK 37(compileSdk 37 · targetSdk 35), 저장소의 Gradle Wrapper(이 저장소의 기본 빌드는 픽업 판이다: `gradle.properties` 의 `meeos.edition=pickup`)
 - PC 서버(선택): Python 3.10 이상(표준 라이브러리만 사용)
 - 지도 타일·CDN 을 받기 위한 인터넷 연결
 
@@ -190,7 +190,30 @@ flowchart TB
 adb install -r -g apk/Meeos_TagoPickup_release.apk
 ```
 
-`-g` 는 마이크(음성 인식) 등 런타임 권한을 함께 준다. 차 화면에서 가족(지수·엄마·할머니)을 고르면 데리러 가기가 시작된다.
+`-g` 는 차 속도 런타임 권한을 함께 준다(음성 인식은 Pleos 음성 SDK 가 맡아 이 앱이 마이크 권한을 묻지 않는다). 차 화면에서 가족(지수·엄마·할머니)을 고르면 데리러 가기가 시작된다. 앱 목록의 이름은 'Tago' 다.
+
+**같은 에뮬레이터에 다른 Meeos 앱이 떠 있을 때.** 앱 안 서버는 포트 8790 을 쓴다. 같은 포트를 쓰는 다른 앱이 먼저 떠 있으면 이 앱의 서버가 뜨지 않고(`adb logcat -s Meeos` 에 '내장 서버 시작 실패: … EADDRINUSE'), 휴대폰 화면이 데이터를 받지 못한다. 그 앱을 먼저 끄고(`adb shell am force-stop <그 앱 패키지>`) 이 앱을 다시 연다.
+
+**새 에뮬레이터에서 첫 실행이 권한 대화상자에서 멈출 때.** Android Automotive 는 앱을 운전자 사용자(보통 10번)에서 돌려 `-g` 가 그 사용자에게 닿지 않을 수 있다(새로 만든 에뮬레이터 첫 설치에서 실제로 멈춘 기록이 있다). 사용자 번호를 확인하고, 다르면 아래의 `10` 을 그 값으로 바꾼다. 권한을 준 뒤 앱을 다시 연다. 이 판의 런타임 권한은 이것 하나다.
+
+```bash
+adb shell am get-current-user
+```
+```bash
+adb shell pm grant --user 10 ai.meeos.tago android.car.permission.CAR_SPEED
+```
+
+**Virtual Console 열기.** 페달·기어·문·방향지시는 에뮬레이터의 Virtual Console 웹 화면으로 조작한다. 포트를 연 뒤 PC 브라우저에서 `http://127.0.0.1:8088/` 을 연다. 창이 작거나(1600×900 미만) 다른 창에 가려지면 페달 조작이 먹지 않을 수 있다.
+
+```bash
+adb forward tcp:8088 tcp:8088
+```
+
+에뮬레이터의 순정 내비 현재 위치는 한 곳에 고정돼 있어, [내비로 안내]를 누르면 만남 지점까지 시연 지역과 무관한 먼 경로가 잡힐 수 있다. 음성으로 답하려면 PC 마이크를 에뮬레이터에 연결한다(버튼으로도 답할 수 있다).
+
+```bash
+adb emu avd hostmicon
+```
 
 **기다리는 사람 화면 보기.** 앱 내장 서버를 PC 로 연다.
 
@@ -198,7 +221,7 @@ adb install -r -g apk/Meeos_TagoPickup_release.apk
 adb forward tcp:8791 tcp:8790
 ```
 
-PC 브라우저(휴대폰 크기)에서 `http://127.0.0.1:8791/m/<세션>` 을 연다. 링크는 `adb logcat -s Meeos` 에 뜬다. 보호자 보기는 `/f/<세션>` 이다.
+PC 브라우저(휴대폰 크기)에서 `http://127.0.0.1:8791/m/<세션>` 을 연다. 링크는 `adb logcat -s Meeos` 에 뜬다(이 기록은 심사용 빌드 — 시연 훅 포함 — 에서만 찍힌다). 보호자 보기는 `/f/<세션>` 이다.
 
 **에뮬레이터 요령.** 에뮬레이터는 좌석 착석이 항상 true 이고 벨트 조작이 없어, 탑승은 2열 문 열림 → 모두 닫힘으로 판정한다. 벨트는 시연 인텐트로 넣는다.
 
@@ -215,10 +238,13 @@ python server/meeos_server.py
 python server/check_parity.py
 ```
 
-**빌드.**
+**빌드.** 제출 APK 는 심사용 빌드(시연 훅 포함)다. 제품 빌드는 옵션 없이 빌드하며, 이때는 시연 인텐트(위의 벨트 시연 포함)·링크 기록이 꺼진다.
 
 ```bash
-./gradlew assembleRelease
+./gradlew assembleRelease -Pmeeos.edition=pickup -Pmeeos.demo=true
+```
+```bash
+./gradlew assembleRelease -Pmeeos.edition=pickup
 ```
 
 ## 7. 저장소 구성

@@ -22,6 +22,12 @@ import ai.pleos.playground.tts.listener.OnInitializeListener as TtsInit
  * 온디바이스 음성(Pleos TTS/STT). 말하기는 줄을 세워 한 문장씩(끊김 방지), 질문을 마친 뒤에만 듣는다(운전자는 '응' 한마디로 끝).
  * 상태 변화(말하는 중·듣는 중)는 콜백으로 알려 화면(VoiceChip)과 지도(WebView 타이머)가 따라간다.
  */
+/** 앱 안내 음성(TTS)이 지금 나오는 중인지. VoiceAssistant 가 쓰고 버튼 누름 피드백(ui/components PressFeedback)이 읽는다 */
+object SpeechState {
+    @Volatile var speaking = false
+        internal set
+}
+
 class VoiceAssistant(private val context: Context, private val main: Handler, private val log: AppLog) {
     private var tts: TextToSpeech? = null
     private var stt: SpeechToText? = null
@@ -30,7 +36,7 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
     @Volatile private var released = false   // 해제 뒤 미뤄 둔 작업(포커스 재시도·막힘 감시·듣기 끝)이 돌지 않게
 
     @Volatile var speaking = false
-        private set
+        private set(v) { field = v; SpeechState.speaking = v }
     var listening = false
         private set
     /** 듣는 동안 들린 말(부분 인식 포함). 화면에 보여 준다 */
@@ -209,6 +215,7 @@ class VoiceAssistant(private val context: Context, private val main: Handler, pr
 
     fun release() {
         released = true
+        speaking = false
         abandonFocus()
         runCatching { tts?.release() }
         runCatching { stt?.release() }

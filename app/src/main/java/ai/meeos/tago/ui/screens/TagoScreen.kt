@@ -89,6 +89,8 @@ class TagoActions(
     val onChargeSkip: () -> Unit = {},
     val onChargeBack: () -> Unit = {},
     val onChargeClose: () -> Unit = {},
+    // 최소 우회 안내 — [우회 안내]를 누를 때만 순정 내비에 나들목을 보낸다(FR-G-36)
+    val onDetour: () -> Unit = {},
 )
 
 /**
@@ -237,9 +239,10 @@ private fun ColumnScope.RoadContent(state: TagoUiState, p: Panel.RoadLink, actio
     Column(verticalArrangement = Arrangement.spacedBy(Dim.gap)) {
         InfoCard(CardUi(CardTone.NEUTRAL, null, null, emptyList())) {
             if (p.connecting != null) Text(p.connecting, style = TagoType.bodyM, color = c.text2)
-            if (p.strip != null) RoadStrip(p.strip, compact || p.chargeLabel != null || !p.showButtons)   // 휴게소 정차·질문 중에는 짧은 축 — 신고 버튼·답 칩 자리
+            if (p.strip != null) RoadStrip(p.strip, compact || p.chargeLabel != null || p.detourLabel != null || !p.showButtons)   // 휴게소 정차·질문 중에는 짧은 축 — 신고 버튼·답 칩 자리
         }
         if (state.question != null) AnswerChips(state.question, actions.onAnswer)
+        if (p.detourLabel != null) TagoButton(p.detourLabel, actions.onDetour, Modifier.fillMaxWidth(), ButtonVariant.SECONDARY, icon = R.drawable.ic_navigation, alignStart = true)
         if (p.showButtons) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Dim.gapS)) {
             TagoButton(p.primaryLabel, actions.onRoadPrimary, Modifier.weight(1.4f), ButtonVariant.PRIMARY, icon = p.primaryIcon)
             TagoButton(p.endLabel, actions.onEndRoad, Modifier.weight(1f), ButtonVariant.SECONDARY)

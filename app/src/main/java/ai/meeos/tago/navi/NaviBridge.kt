@@ -27,6 +27,8 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
     private var navi: NaviHelper? = null
     private var pendingStop: JSONObject? = null
     private var wantSchoolZone = false
+    /** 순정 내비가 경로 안내 중인지(onRouteStarted → true, 안내 종료·오류 → false). 우회 안내가 경유지/목적지를 고른다 */
+    private var routeActive = false
     /** 해외 지역 내비 요청: 시험(navi_all) 중이거나 아직 실패한 적이 없을 때만(에뮬레이터 내비 위치가 국내 고정) */
     private var overseasFailed = false
     /** 순정 내비가 마지막으로 알린 현재 도로 제한속도(km/h). null = 아직 안 옴·모름. 메인 스레드에서만 바뀐다 */
@@ -51,6 +53,7 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
         override fun onRouteStarted(routeStartInfo: RouteStartInfo) {
             main.post {
                 log.d("내비 경로 시작")
+                routeActive = true
                 val stop = pendingStop
                 if (stop != null) {
                     pendingStop = null
@@ -65,7 +68,7 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
             }
         }
 
-        override fun onRoutingCompleted() { log.d("내비 안내 종료") }
+        override fun onRoutingCompleted() { main.post { routeActive = false; log.d("내비 안내 종료") } }
         override fun onRouteStateInfo(routeStateInfo: RouteStateInfo) {
             val evs = routeStateInfo.trafficStatus?.trafficEventList ?: return
             main.post { onTrafficEvents?.invoke(evs) }
@@ -83,6 +86,7 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
         override fun onError(errorCode: NaviErrorCode) {
             main.post {
                 log.d("내비 오류: $errorCode")
+                routeActive = false
                 pendingStop = null; wantSchoolZone = false
                 if (regionProvider() != Region.DAECHI) overseasFailed = true   // 이 내비에 해외 지도가 없으면 다음부터는 요청하지 않는다
             }
@@ -125,6 +129,15 @@ class NaviBridge(private val context: Context, private val main: Handler, privat
     fun routeDomestic(lat: Double, lon: Double, poiName: String) {
         runCatching { navi?.requestRoute(info(lat, lon, poiName)); log.d("내비: 목적지 안내"); log.demo("내비: 목적지 $poiName") }
             .onFailure { log.d("내비 안내 실패: ${it.message}") }
+    }
+
+    /** 최소 우회 안내(FR-G-36, 11-08 통합 기준): 운전자가 [우회 안내]를 눌렀을 때만. 경로 안내 중이면 순정 내비 재탐색(requestReRoute) —
+     *  어느 나들목으로 나갈지는 내비가 정한다. 안내 중이 아니면(목적지 없음) 다음 나들목(lat, lon)을 목적지로. 자동 경로 변경은 하지 않는다 */
+    fun detour(lat: Double, lon: Double, name: String) {
+        runCatching {
+            if (routeActive) navi?.requestReRoute() else navi?.requestRoute(info(lat, lon, name))
+            log.d("내비: 우회 ${if (routeActive) "재탐색" else "다음 나들목 목적지"}"); log.demo("내비: 우회 ${if (routeActive) "재탐색" else "다음 나들목"}")
+        }.onFailure { log.d("우회 안내 요청 실패: ${it.message}") }
     }
 
     fun clearWaypoints() { runCatching { navi?.removeWaypoint(WaypointIndex.ALL) } }

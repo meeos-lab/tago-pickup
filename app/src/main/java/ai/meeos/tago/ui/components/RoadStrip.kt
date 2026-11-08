@@ -24,11 +24,43 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.max
+
+/** 칸 약어(B-61, WCAG 1.4.1 — 색만으로 뜻을 전하지 않는다): 원활은 빈 칸(바탕), 모름은 속이 빈 칸(테두리만), 나머지는 칸 안 글자.
+ *  한국어는 두 글자를 세로로(칸 높이 50~73 dp 에 들어감), 영어는 한 글자. 화면 읽기용 긴 이름은 [binName] */
+private fun binMark(b: BinColor, ko: Boolean): String = when (b) {
+    BinColor.DANGER -> if (ko) "위\n험" else "!"
+    BinColor.PURPLE -> if (ko) "주\n의" else "!"
+    BinColor.RAIN -> if (ko) "비" else "R"
+    BinColor.SLOW -> if (ko) "정\n체" else "J"
+    BinColor.MEDIUM -> if (ko) "서\n행" else "S"
+    BinColor.FREE, BinColor.UNKNOWN -> ""
+}
+private fun binName(b: BinColor, ko: Boolean): String = when (b) {
+    BinColor.DANGER -> if (ko) "위험" else "hazard"
+    BinColor.PURPLE -> if (ko) "주의" else "caution"
+    BinColor.RAIN -> if (ko) "비" else "rain"
+    BinColor.SLOW -> if (ko) "정체" else "jam"
+    BinColor.MEDIUM -> if (ko) "서행" else "slow"
+    BinColor.FREE -> if (ko) "원활" else "clear"
+    BinColor.UNKNOWN -> if (ko) "정보 없음" else "no data"
+}
+/** 칸 색 위 글자: 검정·흰 중 대비가 큰 쪽(WCAG 대비식). 테마마다 칸 색이 달라도 4.5:1 이상을 고른다 */
+private fun inkOn(bg: Color): Color {
+    val l = bg.luminance()
+    return if ((l + 0.05) / 0.05 >= 1.05 / (l + 0.05)) Color.Black else Color.White
+}
 
 /**
  * 앞길 세로 스트립 — 내비의 경로 바처럼 거리 축 위에 내 차·위험·일행·휴게소를 놓는다(docs/ui-design.md §5).
@@ -44,6 +76,8 @@ fun RoadStrip(s: RoadStripUi, compact: Boolean = false) {
     val behindPx = if (compact) 60f else 88f
     val rowH = 52f
     val lineX = 176f         // 축의 x (왼쪽 거리 라벨 "후방 1.5km" 가 한 줄에 들어가는 폭)
+    val barW = 20f           // 칸 폭: 약어 한 글자(14 sp)가 들어가게 12 → 20 dp(B-61)
+    val ko = LocalConfiguration.current.locales[0].language != "en"
     fun yOf(d: Int): Float = if (d >= 0) top + aheadPx * (s.aheadM - d.coerceIn(0, s.aheadM)) / s.aheadM
         else top + aheadPx + behindPx * (-d).coerceAtMost(s.behindM) / s.behindM
     val placed = s.markers.map { it to yOf(it.distM) }.sortedBy { it.second }
@@ -54,8 +88,11 @@ fun RoadStrip(s: RoadStripUi, compact: Boolean = false) {
     Box(Modifier.fillMaxWidth().height(total.dp)) {
         // 축 끝 글("앞 3km"): 축 끝 가까이(맨 위 한 줄 = rowH) 표식이 있으면 그 거리 글과 겹치므로 뺀다(축 밖이라 맨 위에 붙인 것 포함)
         if (s.markers.none { it.distM >= s.aheadM - s.aheadM * rowH / aheadPx }) Text(s.aheadLabel, style = TagoType.labelM, color = c.text2, maxLines = 1, modifier = Modifier.offset(x = 0.dp, y = 0.dp).width((lineX - 20).dp), textAlign = TextAlign.End)
-        // 축: 앞쪽은 칸 색(먼 칸이 위), 뒤쪽은 가는 회색 선
-        if (s.bins.isNotEmpty()) Column(Modifier.offset(x = (lineX - 6).dp, y = top.dp).width(12.dp).height(aheadPx.dp)) {
+        // 축: 앞쪽은 칸 색(먼 칸이 위) + 칸 안 약어(색만으로 뜻을 전하지 않게, B-61), 뒤쪽은 가는 회색 선.
+        // 화면 읽기: 축 하나에 '앞 0~500m 원활, …' 를 붙인다(칸마다 읽으면 표식과 섞인다)
+        val binM = if (s.bins.isEmpty()) 0 else s.aheadM / s.bins.size
+        val axisDesc = s.bins.mapIndexed { i, b -> (if (ko) "앞 ${i * binM}~${(i + 1) * binM}m " else "${i * binM}-${(i + 1) * binM} m ahead ") + binName(b, ko) }.joinToString(", ")
+        if (s.bins.isNotEmpty()) Column(Modifier.offset(x = (lineX - barW / 2).dp, y = top.dp).width(barW.dp).height(aheadPx.dp).semantics { contentDescription = axisDesc }) {
             s.bins.reversed().forEach { b ->
                 val color = when (b) {
                     BinColor.DANGER, BinColor.SLOW -> c.red
@@ -65,9 +102,15 @@ fun RoadStrip(s: RoadStripUi, compact: Boolean = false) {
                     BinColor.MEDIUM -> c.orange
                     BinColor.FREE -> c.green
                 }
-                Box(Modifier.weight(1f).fillMaxWidth().background(color))
+                // 모름은 속이 빈 칸(테두리만): 색이 아닌 모양으로 '정보 없음'. 칸 사이 1 dp 틈은 모름 칸이 이어질 때 경계를 보이게
+                val cell = if (b == BinColor.UNKNOWN) Modifier.border(2.dp, color) else Modifier.background(color)
+                Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 0.5.dp).then(cell), contentAlignment = Alignment.Center) {
+                    val mark = binMark(b, ko)
+                    if (mark.isNotEmpty()) Text(mark, color = inkOn(color), fontSize = 14.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center, maxLines = 2, softWrap = false)
+                }
             }
-        } else Box(Modifier.offset(x = (lineX - 6).dp, y = top.dp).width(12.dp).height(aheadPx.dp).background(c.line))
+        } else Box(Modifier.offset(x = (lineX - barW / 2).dp, y = top.dp).width(barW.dp).height(aheadPx.dp).border(2.dp, c.line))
         Box(Modifier.offset(x = (lineX - 2).dp, y = (top + aheadPx).dp).width(4.dp).height(behindPx.dp).background(c.line))
 
         placed.forEachIndexed { i, (m, _) ->
