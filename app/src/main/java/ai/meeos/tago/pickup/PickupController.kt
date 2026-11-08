@@ -72,6 +72,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
     private var startGen = 0   // 시작 세대: reset 마다 올린다 — 늦게 온 앞 시작 요청의 응답이 뒤 시작(또는 종료)을 덮지 않게
 
     fun start(m: Member) {
+        s.serverError?.let { s.toast(it); return }      // 내장 서버가 안 떴으면 시작하지 않고 이유를 다시 보인다
         member = m
         reset()
         val gen = startGen

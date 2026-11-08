@@ -34,3 +34,6 @@ server/link/sim/results/queue_matched.jsonl
 server/link/sim/data/its_event/
 server/link/sim/results/m_traj/
 server/link/sim/data/vds_volume/kict_expressway_*_hourly.csv
+
+# M-e 실행 궤적(기계마다 수십~수백 GB, 해시 매니페스트만 저장소에) — 메인 논문 M-e
+server/link/sim/results/m_e_traj/

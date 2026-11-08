@@ -144,6 +144,7 @@ class RoadLinkController(private val context: Context, private val s: Services, 
     /** 도로 링크 켜기. 시연(내장 서버)은 도로를 비우고 시작하고, 출발하면 시연 도로(모르는 Tago 차 14대)를 부른다 */
     fun start(pickupActive: Boolean) {
         if (!Edition.roadLink || active || pickupActive) return
+        s.serverError?.let { s.toast(it); return }      // 내장 서버가 안 떴으면 시작하지 않고 이유를 다시 보인다
         val body = JSONObject().put("t", s.epoch()).put("lang", s.lang).put("units", s.units).put("name", myName).put("car", t[R.string.driver_car])
         s.io.execute {
             runCatching {

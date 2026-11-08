@@ -352,7 +352,7 @@ class AppController(context: Context, val s: Services, private val onMapUrl: (St
             regionTitle = t[R.string.region_section],
             regionId = region.id,
             mapUrl = mapUrl,
-            mapEmptyText = if (!BuildConfig.PICKUP) t[R.string.map_empty_gilbeot] else if (BuildConfig.ROAD_LINK) t[R.string.map_empty_road] else t[R.string.map_empty],
+            mapEmptyText = s.serverError ?: if (!BuildConfig.PICKUP) t[R.string.map_empty_gilbeot] else if (BuildConfig.ROAD_LINK) t[R.string.map_empty_road] else t[R.string.map_empty],
             toast = toast,
             devLog = if (devPanel) s.log.lines.toList() else null,
             devStatus = if (devPanel) devStatus() else null,
@@ -365,6 +365,14 @@ class AppController(context: Context, val s: Services, private val onMapUrl: (St
 
     /** MainActivity 가 내장 서버를 띄운 뒤 부른다: 대기 화면 지도를 미리보기로 채운다 */
     fun serverReady() { serverUp = true; if (mapUrl == null) setMap(null) }
+
+    /** MainActivity: 내장 서버가 포트를 못 잡았다. 지도 자리에 이유와 할 일을 남기고(지도는 열지 않는다) 토스트로 한 번 알린다 */
+    fun serverFailed() {
+        val msg = t[R.string.err_server_port, BuildConfig.LOCAL_PORT]
+        s.serverError = msg
+        s.toast(msg)
+        render()
+    }
 
     /** 대기 화면 지도: 길벗 판은 시연 경로 미리보기(경로·휴게소·사고 다발 구간만, 폴링 없음). 픽업이 있는 판은 빈 상태 그대로 */
     private fun idleMap(): String? = if (serverUp && BuildConfig.ROAD_LINK && !BuildConfig.PICKUP) "${BuildConfig.SERVER_URL}/link/road?car=1&preview=1" else null

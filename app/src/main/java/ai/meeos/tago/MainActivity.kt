@@ -277,12 +277,17 @@ class MainActivity : ComponentActivity() {
                 val link = if (Edition.roadLink) LinkHub(text("link/gyeongbu_route.json")) else null
                 val linkPage = runCatching { assets.open("link/link.html").use { it.readBytes() } }.getOrNull()
                 val worldPage = runCatching { assets.open("link/world.html").use { it.readBytes() } }.getOrNull()
-                server = LocalServer(engines, page, link = link, linkPage = linkPage, worldPage = worldPage,
+                server = LocalServer(engines, page, port = BuildConfig.LOCAL_PORT, link = link, linkPage = linkPage, worldPage = worldPage,
                     assetReader = { n -> runCatching { assets.open(n).use { it.readBytes() } }.getOrNull() },
                     allowLatest = BuildConfig.DEMO_HOOKS).also { it.start() }
                 runOnUiThread { app.serverReady() }   // 대기 화면 지도(길벗: 경로 미리보기)는 서버가 뜬 뒤에 연다
                 // 포그라운드 서비스는 픽업·함께 가기가 시작될 때 붙인다(syncForegroundService)
-            }.onFailure { e -> services.log.d("내장 서버 시작 실패: ${e.message}") }
+            }.onFailure { e ->
+                // 포트를 못 잡으면(같은 포트를 쓰는 다른 앱이 먼저 떠 있음 등) 조용히 멈추지 않고 화면에 알린다 — 지도·함께 가기·픽업은 열지 않는다
+                services.log.d("내장 서버 시작 실패: ${e.message}")
+                android.util.Log.e(AppLog.TAG, "내장 서버 시작 실패 :${BuildConfig.LOCAL_PORT}", e)
+                runOnUiThread { app.serverFailed() }
+            }
         }
     }
 

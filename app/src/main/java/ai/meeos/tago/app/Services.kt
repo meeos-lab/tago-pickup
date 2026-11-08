@@ -31,6 +31,9 @@ class Services(
     /** 화면 하단 토스트(3초) */
     var toast: (String) -> Unit = {}
 
+    /** 내장 서버를 못 띄웠을 때의 안내 문장(AppController.serverFailed). 있으면 함께 가기·픽업을 시작하지 않고 이 문장을 보인다 */
+    var serverError: String? = null
+
     fun say(text: String) = voice.say(text)
     fun epoch() = System.currentTimeMillis() / 1000.0
 }

@@ -1,6 +1,6 @@
 """PC 시연 서버(meeos_server.py)와 앱 내장 엔진(MeeosEngine.kt)의 결과가 같은지 대조한다.
 
-준비: PC 서버 실행(:8790), 에뮬레이터에서 타고 앱 실행 후 `adb forward tcp:8791 tcp:8790`
+준비: PC 서버 실행(:8790), 에뮬레이터에서 타고 앱 실행 후 `adb forward tcp:8791 tcp:8793`(이 판 앱 내장 서버 포트)
 사용: python check_parity.py [PC주소] [앱주소] [지역]
  해외 지역은 PC 서버를 지역별로 띄운다: MEEOS_REGION=irvine MEEOS_PORT=8792 python meeos_server.py
  예) python check_parity.py http://127.0.0.1:8792 http://127.0.0.1:8791 irvine

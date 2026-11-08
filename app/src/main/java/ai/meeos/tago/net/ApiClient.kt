@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.util.concurrent.Executor
 
 /**
- * 시연 서버(앱 내장 127.0.0.1:8790 또는 PC 10.0.2.2:8790) HTTP 클라이언트.
+ * 시연 서버(앱 내장 127.0.0.1:<LOCAL_PORT> — 길벗 8790·타고 8793 — 또는 PC 10.0.2.2:8790) HTTP 클라이언트.
  * 요청은 io 스레드에서, 콜백은 메인 스레드에서 부른다. 제품에서는 HTTPS(TLS 1.2+) 도메인 + Authorization 토큰으로 바꾼다.
  */
 class ApiClient(private val baseUrl: String, private val io: Executor, private val main: Handler) {

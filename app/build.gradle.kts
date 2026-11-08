@@ -18,6 +18,9 @@ val pickupOnly = edition == "pickup"
 val gilbeotOnly = edition == "gilbeot"
 require(edition in setOf("", "pickup", "gilbeot")) { "meeos.edition 은 pickup 또는 gilbeot (지금: $edition)" }
 val appLabel = if (gilbeotOnly) "길벗" else "Tago"
+// 앱 내장 서버 포트(에뮬레이터 안 127.0.0.1): 판마다 다르게 — 두 APK 를 한 에뮬레이터에 같이 깔아도 먼저 뜬 앱이 포트를 잡아 다른 앱이 멈추지 않게(11-09).
+// 길벗(ai.meeos.gilbeot) 8790 은 그대로(영상·언리얼·두 차 라이브 도구가 쓴다), 타고 픽업·기본 판(ai.meeos.tago) 은 8793. PC 쪽은 둘 다 adb forward tcp:8791 tcp:<이 값>
+val localPort = if (gilbeotOnly) 8790 else 8793
 // 시연·시험 인텐트 훅(utterance·belt_sim·convoy_sim…): debug 는 항상, release 는 -Pmeeos.demo=true 일 때만 (외부 앱이 인텐트로 명령을 넣는 통로라 제품 빌드에서는 닫는다)
 val demoHooks = (project.findProperty("meeos.demo") as String?) == "true"
 // 연구 기록(경고 반응 로그 — 동의 화면·참가자 정보·JSONL): debug·qa 는 항상, release 는 -Pmeeos.study=true 일 때만(출품 APK 화면은 그대로).
@@ -84,14 +87,15 @@ android {
         targetSdk = 35
         versionCode = gitVersionCode
         versionName = "0.1.0"
-        // 내장 서버: 차량 WebView는 127.0.0.1:8790, PC 브라우저는 adb forward tcp:8791 tcp:8790 후 127.0.0.1:8791
+        // 내장 서버: 차량 WebView는 127.0.0.1:<LOCAL_PORT>(길벗 8790·타고 8793), PC 브라우저는 adb forward tcp:8791 tcp:<LOCAL_PORT> 후 127.0.0.1:8791
         // PC 서버: 에뮬레이터 호스트 10.0.2.2:8790. 제품에서는 HTTPS 도메인으로 교체
         buildConfigField("boolean", "EMBEDDED_SERVER", (!pcServer && serverUrlOverride == null).toString())
         buildConfigField("boolean", "ROAD_LINK", (!pickupOnly).toString())
         buildConfigField("boolean", "EMERGENCY", (!pickupOnly).toString())   // 응급 브리핑은 픽업 출품작 범위 밖(의료 책임)이라 픽업 APK에서 뺀다. 길벗은 사고 뒤 응급 카드에 쓴다
         buildConfigField("boolean", "PICKUP", (!gilbeotOnly).toString())     // 데리러 가기·요일 루틴·근처 찾기 — 길벗 APK에서 뺀다
         buildConfigField("String", "APP_LABEL", "\"$appLabel\"")
-        buildConfigField("String", "SERVER_URL", "\"" + (serverUrlOverride ?: if (pcServer) "http://10.0.2.2:8790" else "http://127.0.0.1:8790") + "\"")
+        buildConfigField("int", "LOCAL_PORT", localPort.toString())
+        buildConfigField("String", "SERVER_URL", "\"" + (serverUrlOverride ?: if (pcServer) "http://10.0.2.2:8790" else "http://127.0.0.1:$localPort") + "\"")
         buildConfigField("String", "PUBLIC_URL", if (pcServer) "\"http://127.0.0.1:8790\"" else "\"http://127.0.0.1:8791\"")
         // TMAP 앱키(local.properties 의 tmap.appKey, 커밋 금지). 있으면 차 화면 지도를 네이티브 TMAP SDK 로, 없으면 웹 지도(/car/)로
         buildConfigField("String", "TMAP_KEY", "\"$tmapAppKey\"")

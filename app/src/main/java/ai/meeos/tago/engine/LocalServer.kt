@@ -12,7 +12,8 @@ import java.util.concurrent.Executors
 
 /**
  * 앱 내장 시연 서버. server/meeos_server.py 와 같은 경로(/api/…, /m/<세션>, /car/<세션>)를 제공한다.
- * 차량 WebView는 127.0.0.1:8790 으로, PC 브라우저는 `adb forward tcp:8791 tcp:8790` 후 127.0.0.1:8791 로 접속한다.
+ * 차량 WebView는 127.0.0.1:<port>(BuildConfig.LOCAL_PORT — 길벗 8790·타고 8793, 두 앱을 한 에뮬레이터에 같이 깔아도 겹치지 않게) 로,
+ * PC 브라우저는 `adb forward tcp:8791 tcp:<port>` 후 127.0.0.1:8791 로 접속한다.
  * 시연 전용 HTTP·무인증. 제품은 HTTPS 서버로 교체한다.
  */
 class LocalServer(private val engines: Map<String, MeeosEngine>, private val page: ByteArray, private val port: Int = 8790,

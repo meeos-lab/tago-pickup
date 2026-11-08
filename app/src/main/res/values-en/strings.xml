@@ -208,6 +208,7 @@
     <string name="sl_charger_ask">If the charger is broken, cars behind will know</string>
     <string name="btn_charger_report">Report a broken charger</string>
     <string name="btn_detour">Detour</string>
+    <string name="err_server_port">Could not start the in-app server (port %1$d is in use). Close the other app using it, then reopen this app.</string>
     <string name="toast_location_why">Location is used only inside the car to tell rest-area parking from stops on the highway. It is never sent.</string>
     <string name="hl_charge_survey">Report a broken charger</string>
     <string name="sl_charge_survey">One question at a time · skip what you don\'t know</string>

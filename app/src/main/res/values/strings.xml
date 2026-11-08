@@ -215,6 +215,7 @@
     <string name="sl_charger_ask">충전기 고장이면 뒤차에 알립니다</string>
     <string name="btn_charger_report">충전기 고장 신고</string>
     <string name="btn_detour">우회 안내</string>
+    <string name="err_server_port">앱 안 서버를 열지 못했습니다(포트 %1$d 사용 중). 같은 포트를 쓰는 다른 앱을 끄고 이 앱을 다시 여세요.</string>
     <string name="toast_location_why">휴게소 주차와 본선 정차를 구분하기 위해 차 안에서만 위치를 씁니다. 위치는 전송하지 않습니다.</string>
     <string name="hl_charge_survey">충전기 고장 신고</string>
     <string name="sl_charge_survey">한 문항씩 · 모르면 건너뛰세요</string>
