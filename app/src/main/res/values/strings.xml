@@ -23,15 +23,12 @@
 
     <!-- 대기 화면 -->
     <string name="hl_idle">누구를 데리러 갈까요?</string>
-    <string name="sl_idle">가족을 선택하면 타고 링크를 보냅니다</string>
     <string name="hl_idle_road">오늘은 누구와 갈까요?</string>
-    <string name="sl_idle_road">가족 차 묶기 또는 데리러 갈 가족 선택</string>
-    <string name="btn_road_link">함께 가기 · 앞차와 위험 공유</string>
+    <string name="sl_idle_road">함께 가기 또는 데리러 갈 가족 선택</string>
+    <string name="btn_road_link">길벗 연결 · 앞차와 위험 공유</string>
     <string name="map_empty">데리러 갈 가족을 선택하면 지도가 표시됩니다</string>
     <string name="hl_idle_gilbeot">앞차들과 위험을 나눌까요?</string>
-    <string name="sl_idle_gilbeot">같은 길의 길벗 차와 연결하고, 가족 차를 묶을 수 있습니다</string>
-    <string name="map_empty_gilbeot">함께 가기를 시작하면 지도가 표시됩니다</string>
-    <string name="notif_road">길벗 연결 중</string>
+    <string name="map_empty_gilbeot">주행을 시작하면 지도가 표시됩니다</string>
     <string name="map_empty_road">함께 가기나 데리러 갈 가족을 선택하면 지도가 표시됩니다</string>
     <string name="region_section">시연 지역</string>
     <string name="say_region_switched">%1$s 지역으로 바꿨습니다.</string>
@@ -62,7 +59,6 @@
 
     <!-- 픽업: 화면 -->
     <string name="hl_waiting_rider">%1$s 위치를 기다리는 중</string>
-    <string name="sl_waiting_rider">타고 링크를 보냈습니다</string>
     <string name="hl_proposal">%1$s 앞에서 만날까요?</string>
     <string name="sl_proposal">%1$s 걸어서 %2$s · 차 %3$s 후 · 정차 %4$d분까지</string>
     <string name="hl_enroute">%1$s 앞으로 가는 중</string>
@@ -82,11 +78,9 @@
     <string name="hl_parked_waiting">주차장에서 기다리는 중</string>
     <string name="sl_parked_waiting">%1$s 나오면 만날 곳으로 다시 안내합니다</string>
     <string name="hl_routine">%1$s %2$s입니다</string>
-    <string name="sl_routine">타고 링크를 보낼까요?</string>
     <string name="routine_after_school">학원 끝날 시간</string>
 
     <!-- 픽업: 음성 -->
-    <string name="say_link_sent">%1$s에게 타고 링크를 보냈습니다. 위치가 공유되면 만날 곳을 안내합니다.</string>
     <string name="say_propose">%1$s 안내할까요? ‘응’ 또는 ‘다른 곳’으로 답하세요.</string>
     <string name="say_no_alternative">다른 장소가 없습니다. 추천 장소로 안내합니다.</string>
     <string name="say_confirmed_driver">%1$s 안내합니다. %2$s에게 알렸습니다.</string>
@@ -103,9 +97,7 @@
     <string name="say_dropped">%1$s 하차를 확인했습니다. 가족에게 도착 알림을 보냈습니다.</string>
     <string name="say_board_curb_door">%1$s, %2$s 문으로 타 주세요. %3$s은 차도 쪽입니다.</string>
     <string name="say_exit_curb_door">%1$s 문으로 내려 주세요.</string>
-    <string name="say_routine_prompt">%1$s %2$s입니다. %1$s에게 타고 링크를 보낼까요?</string>
     <string name="say_routine_skip">오늘은 보내지 않습니다.</string>
-    <string name="navi_poi_meeting">%1$s 앞 (Tago)</string>
     <string name="lead_late_minutes">"%1$s 도착 %2$s분 지연. "</string>
     <string name="lead_walk_slower">"%1$s 도착이 차량보다 %2$s 늦습니다. "</string>
 
@@ -159,11 +151,12 @@
     <string name="say_store_arrived">%1$s에 도착했습니다. 주문을 받은 뒤 출발하세요.</string>
     <string name="say_back_to_meeting_point">만날 곳으로 안내합니다.</string>
 
-    <!-- 함께 가기(도로 링크) -->
+    <!-- 차대차 연결 -->
     <string name="driver_name">아빠</string>
     <string name="driver_car">그랜저 · 흰색</string>
-    <string name="hl_road_on">함께 가기 연결됨</string>
-    <string name="sl_road_nearby">주변 차량 %1$d대</string>
+    <string name="hl_ff">빠르게 감기 ×%1$s</string>
+    <string name="hl_road_on">길벗 연결됨</string>
+    <string name="sl_road_nearby">주변 차 %1$d대</string>
     <string name="sl_road_next">" · 다음 %1$s %2$s"</string>
     <string name="hl_hazard">%1$s 앞 %2$s</string>
     <string name="sl_hazard_by">%1$s 차량이 알렸습니다</string>
@@ -172,12 +165,32 @@
     <string name="hl_siren">후방 %1$s 긴급차량 · 진로 양보</string>
     <string name="sl_siren">차량 %1$d대 사이렌 감지</string>
     <string name="sl_siren_eta">" · 약 %1$d초 후 통과"</string>
-    <string name="hl_siren_ev">후방 %1$s 구급차 · 진로 양보</string>
+    <string name="hl_siren_ev">후방 %1$s %2$s · 진로 양보</string>
     <string name="hl_siren_yield">후방 %1$s 긴급차량 추정 · 진로 양보</string>
-    <string name="sl_siren_beacon">구급차 위치 신호</string>
+    <string name="sl_siren_beacon">%1$s 위치 신호</string>
+    <string name="veh_ambulance">구급차</string>
+    <string name="veh_fire">소방차</string>
+    <string name="veh_police">경찰차</string>
     <string name="sl_siren_yield">뒤쪽 차 %1$d대 길 비킴</string>
     <string name="hl_advice">권장 시속 %1$d</string>
     <string name="sl_advice">%1$s 앞 정체 · 앞차 평균 시속 %2$d · 브레이크 없이 합류</string>
+    <!-- 경고 화면 머리(11-13 디자인 손질): 큰 거리 숫자 옆·아래 제목과 본문. 뜻은 hl_*·sl_* 와 같다 -->
+    <string name="al_hazard">앞 %1$s</string>
+    <string name="al_siren_lead">후방</string>
+    <string name="al_siren_unit">%1$s</string>
+    <string name="al_siren_ev">%1$s · 진로 양보</string>
+    <string name="al_siren">긴급차량 · 진로 양보</string>
+    <string name="al_siren_yield">긴급차량 추정 · 진로 양보</string>
+    <string name="al_advice">앞 정체 · 권장 시속 %1$d</string>
+    <string name="al_advice_sub">앞차 평균 시속 %1$d · 브레이크 없이 합류</string>
+    <string name="al_advice_eyebrow">앞차 평균 시속 %1$d</string>
+    <string name="al_siren_after">뒤</string>
+    <string name="band_siren">긴급차량 접근</string>
+    <string name="al_siren_eta_short">약 %1$d초</string>
+    <string name="al_ahead">앞</string>
+    <string name="al_advice_what">정체 · 권장 시속 %1$d</string>
+    <string name="hero_road">앞차가 급히 멈추면,\n뒤차가 먼저 압니다.</string>
+    <string name="btn_road_start">지금 연결</string>
     <string name="hl_rain">약 %1$d분 후 비 예상</string>
     <string name="sl_rain">%1$s 앞 · 앞차 %2$d대 와이퍼 작동</string>
     <string name="hl_rest_ask">다같이 휴게소에 들를까요?</string>
@@ -191,9 +204,9 @@
     <string name="member_stopped">멈춤</string>
     <string name="member_slow">느림</string>
     <string name="member_phone">" (휴대폰)"</string>
-    <string name="btn_link_family">가족 차 묶기</string>
+    <string name="btn_link_family">함께 가기</string>
     <string name="btn_rest_together">다같이 휴게소</string>
-    <string name="btn_end">끝내기</string>
+    <string name="btn_end">연결 끊기</string>
     <string name="hz_incident">사고 의심</string>
     <string name="hz_hard_brake">급제동</string>
     <string name="hz_blocked">길 막힘 의심</string>
@@ -247,11 +260,45 @@
     <string name="cs_q_alt">다른 기기로 충전했나요?</string>
     <string name="btn_back">이전</string>
     <string name="btn_skip_unknown">모름 · 건너뛰기</string>
-    <string name="say_road_started">함께 가기를 시작합니다. 주변 차량과 위험 정보를 공유합니다.</string>
-    <string name="say_road_ended">함께 가기를 종료합니다. 위치 공유를 중지했습니다.</string>
-    <string name="say_group_created">가족 그룹을 만들었습니다. 코드 %1$s. 참여 링크를 보냈습니다.</string>
+    <string name="say_road_started">길벗에 연결됐습니다. 주변 차량과 위험 정보를 나눕니다.</string>
+    <string name="say_road_ended">길벗 연결을 끊었습니다. 위치 공유를 중지했습니다.</string>
+    <string name="say_group_created">함께 가기 일행을 만들었습니다. 코드 %1$s. 참여 링크를 보냈습니다.</string>
     <string name="say_rest_guide">%1$s 안내합니다. 일행에게 알렸습니다.</string>
     <string name="say_rest_skip">경유하지 않습니다.</string>
+    <string name="say_park_saved">주차 위치를 기억했습니다. %1$s.</string>
+    <string name="say_park_updated">주차 위치를 사진으로 고쳤습니다. %1$s.</string>
+    <string name="say_dest_set">목적지 %1$s. 경로로 %2$s킬로미터입니다.</string>
+    <string name="say_dest_arrived">목적지 %1$s 근처에 왔습니다.</string>
+    <string name="dest_title">목적지</string>
+    <string name="dest_hint">장소 이름(예: 천안, 기흥휴게소)</string>
+    <string name="dest_ahead">경로로 %1$s km</string>
+    <string name="btn_dest_search">검색</string>
+    <string name="btn_dest_clear">지우기</string>
+    <string name="btn_dest_close">닫기</string>
+    <string name="btn_dest_open">목적지 검색</string>
+    <string name="dest_none">TMAP 장소 검색에서 찾지 못했습니다. 이름을 바꿔 보세요.</string>
+    <string name="dest_off_route">%1$d곳을 찾았지만 모두 시연 경로(경부고속도로 하행) 밖입니다.</string>
+    <string name="dest_prompt">어디로 갈까요?</string>
+    <string name="say_dest_real">목적지 %1$s. 실제 경로로 %2$s킬로미터, 약 %3$d분입니다.</string>
+    <string name="say_dest_noroute">목적지 %1$s. 실제 경로를 받지 못했습니다.</string>
+    <string name="dest_real">실제 경로 %1$s km · 약 %2$d분</string>
+    <string name="dest_routing">실제 경로를 찾는 중</string>
+    <string name="say_demo_section">지금 위치는 시연 경로 밖이라, 시연 구간 경부고속도로 하행에서 보여 드립니다.</string>
+    <string name="sl_demo_drive">시연 주행 · 경부고속도로 하행</string>
+    <string name="dest_from_here">여기서 곧은 거리 %1$s km</string>
+    <string name="go_demo_hint">누르면 시연 구간(경부고속도로 하행)으로 이동해 보여 드려요</string>
+    <string name="route_real_name">현재 위치 → %1$s</string>
+    <string name="say_real_route">목적지까지의 실제 경로 위에서 주변 차와 연결합니다.</string>
+    <string name="sl_sim_real">시연 주행(속도로 이동)</string>
+    <string name="here_wait">위치를 받는 중</string>
+    <string name="dest_locked">정차(P) 때 검색할 수 있어요</string>
+    <string name="dest_off_tag">이 시연 경로 밖</string>
+    <string name="dest_pick_off">시연 경로 밖이라 고를 수 없어요. 이 판은 경부고속도로 하행 시연 경로 위에서만 됩니다.</string>
+    <string name="dest_failed">검색하지 못했습니다. 인터넷 연결을 확인하세요.</string>
+    <string name="say_detour_sent">순정 내비에 우회 안내를 요청했습니다.</string>
+    <string name="say_detour_demo">시연 주행이라 순정 내비에는 우회를 넘기지 않았습니다.</string>
+    <string name="say_navi_started">순정 내비로 %1$s 안내를 시작했습니다.</string>
+    <string name="say_rest_noted">%1$s에 들르기로 일행에게 알렸습니다.</string>
     <string name="say_jam_cleared">정체 구간을 급제동 없이 통과했습니다.</string>
 
     <!-- 응급 상황 브리핑 -->
@@ -269,4 +316,145 @@
     <string name="say_emergency_card">%1$s응급 카드를 표시했습니다. %2$s, 좌석 센서 기준 %3$d명 탑승. %4$s 연결은 화면 버튼을 누르세요.</string>
     <string name="say_no_phone_app">전화 앱을 열 수 없습니다. 룸미러의 SOS 버튼을 누르세요.</string>
     <string name="say_emergency_closed">응급 카드를 닫았습니다.</string>
+    <string name="rearcam_title">후방 카메라</string>
+    <string name="rearcam_hint">기어 R · 언리얼 실시간 장면 · 뒤 센서</string>
+    <string name="say_rear_obstacle">뒤에 장애물이 가깝습니다. 멈추세요.</string>
+    <string name="btn_licenses">오픈소스 고지</string>
+    <string name="hl_licenses">오픈소스 고지</string>
+    <string name="sl_licenses">이 앱이 쓰는 외부 소프트웨어와 데이터의 출처입니다.</string>
+    <string name="lic_note_sdk">Pleos SDK와 TMAP SDK는 제공처의 이용 조건에 따라 쓰며, 라이선스 문구는 확인하지 못했습니다.</string>
+    <string name="lic_note_data">지도 데이터 © OpenStreetMap 기여자(ODbL). 공공데이터는 제공 기관의 이용 조건(공공누리 등)을 따릅니다. 단속카메라·제한속도: 경찰청 「전국무인교통단속카메라표준데이터」(공공데이터포털, 저작자표시).</string>
+    <string name="lic_note_file">전체 목록과 버전은 저장소의 THIRD_PARTY_NOTICES.md 에 있습니다.</string>
+
+    <!-- 차량 앱 검증 2026-11-13 (docs/dev/95): 서비스 못 씀 · 허브 끊김 · 내비 요청 실패 · 응급 위치 -->
+    <string name="notice_voice_down">음성 안내를 쓸 수 없습니다 — 다시 연결하는 중</string>
+    <string name="notice_car_down">차량 신호를 쓸 수 없습니다 — 다시 연결하는 중</string>
+    <string name="notice_both_down">음성 안내·차량 신호를 쓸 수 없습니다 — 다시 연결하는 중</string>
+    <string name="hl_link_lost">연결이 끊겼습니다</string>
+    <string name="sl_link_lost">마지막 안내는 %1$d초 전 것입니다. 앞길 안내를 멈추고 다시 연결하는 중</string>
+    <string name="link_reconnecting">서버 연결을 다시 시도하는 중…</string>
+    <string name="say_link_lost">서버 연결이 끊겨 앞길 안내를 잠시 멈춥니다. 앞을 직접 살피세요.</string>
+    <string name="say_link_back">서버에 다시 연결했습니다.</string>
+    <string name="say_navi_failed">내비에 요청하지 못했습니다.</string>
+    <string name="toast_navi_failed">내비에 요청하지 못했습니다</string>
+    <string name="emg_place_unknown">위치를 알 수 없습니다</string>
+    <string name="emg_place_gps">위도 %1$s · 경도 %2$s</string>
+    <string name="lic_note_driver">이 앱의 안내는 보조 정보이며 운전 책임은 운전자에게 있습니다. 119 는 자동으로 걸지 않습니다.</string>
+    <!-- 새 기능 2026-11-13: 요약·틀림·응급 장소·시연 한 바퀴·긴급차량 배너 -->
+    <string name="sum_title">이번 주행 요약</string>
+    <string name="sum_alerts">알림 %1$d건 · 그중 확인 %2$d건</string>
+    <string name="sum_wrong">틀림으로 표시 %1$d건</string>
+    <string name="sum_minutes">걸린 시간 %1$d분</string>
+    <!-- 주차 위치 기억(새 기능 H) -->
+    <string name="park_line">주차 %1$s</string>
+    <string name="park_floor_unknown">층 모름</string>
+    <string name="park_est">%1$s(추정)</string>
+    <string name="park_range">%1$s~%2$s</string>
+    <string name="park_check_photo">사진으로 확인</string>
+    <string name="park_est_was">추정은 %1$s</string>
+    <string name="park_ev_est_turn">회전으로만 추정</string>
+    <string name="park_ev_est_height">회전·높이로 추정</string>
+    <string name="park_ev_bldg_none">건물 정보 없음</string>
+    <string name="park_ev_photo">기둥 사진</string>
+    <string name="park_ev_user">직접 고침</string>
+    <string name="park_ev_ramps">경사로 %1$d번</string>
+    <string name="park_ev_bldg">건축물대장 지하 %1$d층</string>
+    <string name="park_ev_bldg_conflict">대장과 다름</string>
+    <string name="park_tag_photo">사진</string>
+    <string name="park_ev_age_m">%1$d분 전 기록</string>
+    <string name="park_ev_age_h">%1$d시간 전 기록</string>
+    <string name="btn_park_fix">고치기</string>
+    <string name="btn_park_up">한 층 위</string>
+    <string name="btn_park_down">한 층 아래</string>
+    <string name="btn_park_clear">지우기</string>
+    <string name="btn_park_done">완료</string>
+    <string name="park_ocr_ok">기둥 번호를 기록했어요</string>
+    <string name="park_ocr_none">사진에서 층·기둥 글자를 찾지 못했어요</string>
+    <string name="park_ocr_fail">사진 글자를 읽지 못했어요</string>
+    <string name="park_ocr_wait">기둥 번호를 받았어요. 주차하면 기록해요</string>
+    <string name="btn_alert_wrong">방금 경고가 틀렸어요 (기록만)</string>
+    <string name="toast_alert_wrong">기록했습니다. 안내 판단은 바뀌지 않습니다</string>
+    <string name="btn_demo_lap">시연 주행</string>
+    <string name="banner_siren">긴급차량 접근 · 진로를 양보하세요</string>
+    <string name="emg_ic_ahead">가까운 나들목 %1$s · 앞 %2$s</string>
+    <string name="emg_ic_behind">가까운 나들목 %1$s · %2$s 지남</string>
+    <string name="emg_rest_ahead">가까운 휴게소 %1$s · 앞 %2$s</string>
+    <string name="emg_rest_behind">가까운 휴게소 %1$s · %2$s 지남</string>
+    <!-- 말로 검색·설정(11-14, 첫 화면 판) -->
+    <string name="dest_mic">말로 검색</string>
+    <string name="dest_listening">갈 곳을 말해 주세요</string>
+    <string name="dest_speak_now">말씀하세요</string>
+    <string name="dest_hearing">듣고 있어요</string>
+    <string name="dest_voice_silent">말소리가 들리지 않았어요. 마이크를 눌러 다시 말해 주세요</string>
+    <string name="dest_voice_nomatch">알아듣지 못했어요. 다시 말하거나 글자로 적어 주세요</string>
+    <string name="dest_voice_mic">마이크를 쓸 수 없어요(권한 또는 장치). 글자로 적어 주세요</string>
+    <string name="dest_voice_busy">안내가 끝난 뒤 다시 눌러 주세요</string>
+    <string name="dest_voice_down">음성 인식을 지금 쓸 수 없어요. 글자로 적어 주세요</string>
+    <string name="settings_title">설정</string>
+    <string name="settings_back">닫기</string>
+    <string name="set_real_loc">내 실제 위치 쓰기</string>
+    <string name="set_real_loc_sub">끄면 시연 경로의 출발 자리에서 시작해요</string>
+    <string name="set_park_clear">저장된 주차 위치 지우기</string>
+    <string name="set_park_clear_btn">지우기</string>
+    <string name="set_study">연구 기록</string>
+    <string name="set_on">켜짐</string>
+    <string name="set_off">꺼짐</string>
+    <string name="set_licenses">고지(개인정보·오픈소스)</string>
+    <string name="set_version">%1$s %2$s (빌드 %3$d)</string>
+    <string name="set_locked">정차(P) 때 열 수 있어요</string>
+    <!-- 주변 차 연결(일반 주행, 모르는 차끼리) / 일행(아는 차끼리) 나누기 — 11-14 사용자 "함께가기가 메인이 아니라 서로 모르는 차들 차대차 링크가 핵심" -->
+    <string name="link_auto_line">주행하면 주변 차와 자동으로 연결됩니다</string>
+    <string name="link_auto_off">자동 연결 꺼짐 · 눌러서 켜기</string>
+    <string name="link_need_consent">동의하면 주행할 때 주변 차와 연결됩니다</string>
+    <string name="link_status_title">주변 차 연결</string>
+    <string name="cam_m">%1$dm</string>
+    <string name="cam_km">%1$skm</string>
+    <string name="cam_speed">과속 단속</string>
+    <string name="cam_section_start">구간단속 시작</string>
+    <string name="cam_section">구간단속</string>
+    <string name="cam_to_end">끝까지 %1$s</string>
+    <string name="set_auto_link">주행 시 자동 연결</string>
+    <string name="set_auto_link_sub">달리는 동안 주변 차와 위험 정보를 주고받아요</string>
+    <string name="consent_title">달리는 동안 주변 차와\n위험 정보를 주고받습니다</string>
+    <string name="consent_send">보내는 것: 경로 위 위치(익명 번호), 급정지·와이퍼 같은 차량 신호</string>
+    <string name="consent_not">보내지 않는 것: 이름, 번호판, 연락처</string>
+    <string name="consent_stop">설정에서 언제든 끌 수 있습니다</string>
+    <string name="btn_consent_agree">동의하고 켜기</string>
+    <string name="btn_consent_later">나중에</string>
+    <string name="priv_title">개인정보 고지</string>
+    <string name="sl_notice">개인정보를 어떻게 다루는지와 이 앱이 쓰는 외부 소프트웨어·데이터의 출처입니다.</string>
+    <string name="priv_send">보내는 것: 경로 위 위치(좌표가 아닌 경로 위 거리)와 익명 차량 번호, 속도·와이퍼 같은 차량 신호, 급정지·충돌이 의심될 때 직전 속도, 일행 화면에 보이는 부르는 이름과 차 설명</string>
+    <string name="priv_use">쓰는 곳: 주변 차와 사고 의심·급제동·긴급차량 같은 위험을 주고받아 안내하는 데에만 씁니다</string>
+    <string name="priv_third">지도·경로: 목적지를 검색하거나 고를 때 차의 위치와 목적지 좌표가 경로 계산을 위해 SK(티맵모빌리티) 지도 서버로 갑니다</string>
+    <string name="priv_keep">보관: 주변 차 정보는 연결 서버의 메모리에만 있고 서버를 다시 켜면 사라집니다. 연구 기록을 켠 경우 마지막으로 쓴 지 30일이 지나면 자동으로 지웁니다</string>
+    <string name="priv_not">보내지 않는 것: 실명, 전화번호, 번호판. 연결 서버로는 좌표를 보내지 않습니다</string>
+    <string name="priv_withdraw">동의는 설정의 [동의 거두기]로 언제든 거둘 수 있습니다</string>
+    <string name="lic_title">오픈소스·데이터 출처</string>
+    <string name="set_withdraw">주변 차 연결 동의 거두기</string>
+    <string name="set_withdraw_sub">거두면 연결을 끊고, 다음에 다시 동의를 묻습니다</string>
+    <string name="set_withdraw_btn">거두기</string>
+    <string name="consent_more">자세히</string>
+    <string name="btn_convoy">함께 가기</string>
+    <string name="pill_convoy">함께 가기 · 일행 %1$d대</string>
+    <string name="convoy_code">함께 가기 코드 %1$s</string>
+    <string name="member_parked">주차 %1$s</string>
+    <string name="park_mates">일행 %1$d대 주차함</string>
+    <string name="park_mates_near">일행 %1$d대 주차함 · 가까이</string>
+    <string name="pill_no_cars">주변 차 없음</string>
+    <!-- 최소 표시 첫 화면(시안 C, 11-14 "최소한으로 표시되게") -->
+    <string name="link_short_wait">연결 대기</string>
+    <string name="link_short_off">꺼짐</string>
+    <string name="link_short_consent">동의 필요</string>
+    <string name="pill_cars">· %1$d대</string>
+    <string name="pill_linked">· 연결됨</string>
+    <string name="home_menu">더 보기</string>
+    <!-- 시연 주행 재생 막대(시연 판만, 11-14 "동영상 재생 처럼") -->
+    <string name="player_play">재생</string>
+    <string name="player_stop">시연 끝내기</string>
+    <string name="player_pause">멈춤</string>
+    <string name="player_seek">진행 줄 — 누른 자리로 옮기기</string>
+    <string name="player_speed">배속 ×%1$s — 누르면 바뀜</string>
+    <string name="player_rate">×%1$s</string>
+    <string name="player_pos">%1$s / %2$s km</string>
+    <string name="player_hold">이 구간은 ×1</string>
 </resources>

@@ -11,6 +11,7 @@
     "car": {"type": ["string", "null"], "maxLength": 200},
     "kind": {"type": ["string", "null"], "maxLength": 64, "description": "빈 값 = pleos 차, \"ev\" = 구급차 비컨"},
     "token": {"type": ["string", "null"], "maxLength": 256},
+    "vtype": {"type": ["string", "null"], "maxLength": 16, "description": "비컨(kind \"ev\") 차종: ambulance(기본)·fire·police. 그 밖·없음은 ambulance. 진로 양보 판단은 차종과 무관하고 문구만 다르다"},
     "units": {"type": ["string", "null"], "maxLength": 8, "description": "거리 단위 km·mi(지역 프로필 server/regions/<id>.json units — 어바인만 mi). 그 밖·없음은 km. 영어 거리 글에만 쓴다(ADR-45)"}
   }
 }

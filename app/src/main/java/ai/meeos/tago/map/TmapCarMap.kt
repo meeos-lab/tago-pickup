@@ -91,6 +91,10 @@ class TmapCarMap(
     private val dp = ctx.resources.displayMetrics.density * WEB_SCALE   // 우리 표시(퍽·라벨·범례·여백)는 웹 지도와 같은 크기: 차 WebView 는 CSS 1px = 1.375 px(실측)
 
     private var ready = false
+    private val cover = android.widget.TextView(ctx).apply {
+        gravity = Gravity.CENTER; textSize = 18f
+        setBackgroundColor(android.graphics.Color.parseColor("#ECEDEF")); setTextColor(android.graphics.Color.parseColor("#6E7480"))
+    }
     /** VSM 엔진(TMapView 비공개 필드, R8 이 이름을 지킨다): 핀치 배율·POI 설정에 쓴다 */
     private val engine: com.skt.tmap.vsm.map.MapEngine? by lazy {
         runCatching { TMapView::class.java.getDeclaredField("vsmMapEngine").apply { isAccessible = true }.get(map) as com.skt.tmap.vsm.map.MapEngine }
@@ -135,6 +139,8 @@ class TmapCarMap(
 
     init {
         view.addView(map, FrameLayout.LayoutParams(MATCH, MATCH))
+        // 지도가 준비되기 전 덮개(11-14): SDK 의 회색 그러데이션·'MAP' 글자 대신 한 가지 색 + 한 줄(지도 페이지의 '불러오는 중'과 같은 문법). 준비 뒤 1.5초에 걷는다(타일이 그려질 틈)
+        view.addView(cover, FrameLayout.LayoutParams(MATCH, MATCH))
         legend.apply {
             setTextSize(TypedValue.COMPLEX_UNIT_PX, 18 * dp)
             setPadding(px(12), px(8), px(12), px(8))
@@ -166,6 +172,7 @@ class TmapCarMap(
             main.post {
                 if (destroyed) return@post
                 ready = true
+                main.postDelayed({ cover.visibility = android.view.View.GONE }, 1500)
                 map.setVisibleLogo(true)
                 map.setMapType(if (dark) TMapView.MapType.NIGHT else TMapView.MapType.DEFAULT)
                 tidyMap()
@@ -201,6 +208,10 @@ class TmapCarMap(
             clearAll()
         }
         setDark(night)
+        if (!ready) {   // 준비 전 덮개의 글·색(밤은 짙게)
+            cover.text = t("지도를 불러오는 중입니다", "Loading the map…")
+            cover.setBackgroundColor(android.graphics.Color.parseColor(if (night) "#1C1C1C" else "#ECEDEF")); cover.setTextColor(android.graphics.Color.parseColor(if (night) "#9E9E9E" else "#6E7480"))
+        }
         kick()
     }
 
@@ -216,6 +227,7 @@ class TmapCarMap(
         lastState?.let { if (ready) safeDraw(it) }
     }
 
+    /** MainActivity.onStart·onStop 이 부른다(onResume·onPause 아님 — 화면을 나눠 쓰는 Pleos 에서 보이는 채 쉼에 머물 수 있다) */
     fun onResume() { paused = false; runCatching { map.onResume() }; kick() }
     fun onPause() { paused = true; runCatching { map.onPause() } }
     fun destroy() { destroyed = true; paused = true; main.removeCallbacksAndMessages(null); runCatching { map.onDestroy() }; net.quitSafely() }
@@ -467,7 +479,11 @@ class TmapCarMap(
         // 내 차 = SDK 에 든 순정 커서 그림(VSM SDK location_marker: 흰 원 + 파란 화살표)을 마커로, 진행 방향으로 돌린다.
         // SDK 의 현재 위치 레이어(setIconVisibility)는 기본 그림이 작은 파란 공이고 회전을 쓰지 않아(실측) 쓰지 않는다
         // 엔진 마커 회전 = 정북에서 시계 방향 0~360(실측: 0 위 · 90 오른쪽 · 180 아래 · 270 왼쪽). 엔진 heading 은 atan2 라 −180~180 → 음수(서쪽 성분)면 화살표가 위로 고정됐다 → 0~360 으로 바꿔 넘긴다
-        val car = Mk("car", carLL, icons.cursor(), 0.5f, 0.5f, 3000f, rotation = ((heading % 360 + 360) % 360).toFloat())
+        // 11-14: 상태마다 표식 하나 — 만날 곳으로 가는 중(확정 뒤, 도착 전)은 화살촉 하나를 진행 방향으로, 그 밖(기다림·제안·도착·탑승)은 점 + 후광(회전 없음).
+        // 순정 커서(흰 원 안 파란 화살표)는 "두 표식이 겹친 꼴"이라 쓰지 않는다(사용자 지적, 지도 페이지와 같은 원칙)
+        val enRoute = confirmed != null && !arrivedLike
+        val car = if (enRoute) Mk("car", carLL, icons.arrowhead(), 0.5f, 0.5f, 3000f, rotation = ((heading % 360 + 360) % 360).toFloat())
+                  else Mk("car", carLL, icons.dot(), 0.5f, 0.5f, 3000f)
 
         val markers = ArrayList<Mk>()
         // 제외 지점(만날 곳 120m 안, 가까운 3곳) — 제안 중에만
@@ -738,7 +754,7 @@ class TmapCarMap(
         private const val POLL_MOVING_MS = 4000L        // 달릴 때(지도는 엔진 경로로 보간)
         private const val MOVING_MS = 0.5               // m/s — 이보다 빠르면 달리는 중
         private const val READY_TIMEOUT_MS = 15_000L    // TMAP 이 이 안에 준비되지 않으면 웹 지도로
-        private const val USER_BROWSE_MS = 20_000L      // 손으로 만진 뒤 자동 맞춤을 쉬는 시간
+        private const val USER_BROWSE_MS = 8_000L      // 손으로 만진 뒤 자동 맞춤을 쉬는 시간(11-14 20 → 8초, 지도 페이지의 [내 위치]와 같다 — 주행 중 조작을 줄인다)
         private const val ROUTE_REFRESH_MS = 60_000L    // 달리는 중 티맵 노선 다시 받기
         private const val ROUTE_BACKOFF_MS = 5 * 60_000L   // 티맵 노선 실패(429·오프라인) 뒤 쉬는 시간 — 그동안 엔진 경로
         private const val FIT_SINGLE_ZOOM = 16          // 점 하나만 맞출 때 줌

@@ -101,12 +101,38 @@ class ResponseLog(private val context: Context, private val s: Services) {
     // 차로 변경 후보: 깜빡이가 켜진 뒤 8초 안에 조향이 3° 이상 움직이면
     private var turnOnAt = 0L; private var turnSide: String? = null; private var turnSteer0: Float? = null; private var laneSaid = false
 
+    /** 보존 기한(StudyRetention.KEEP_DAYS 일)이 지난 세션 파일을 지운다. 쓰기와 같은 스레드에서 해서 쓰는 중인 파일과 겹치지 않는다 */
+    private fun purgeOld() {
+        writer.execute { runCatching {
+            // 내보내기가 앱 외부 폴더(Android/data/<패키지>/files/study/)에 만든 사본도 같은 기한으로 지운다(내부만 지우면 사본이 영구히 남는다)
+            val now = System.currentTimeMillis()
+            val n = StudyRetention.purge(dir, now, keep = file) + (context.getExternalFilesDir(null)?.let { StudyRetention.purge(File(it, "study"), now, keep = file) } ?: 0)
+            if (n > 0) s.log.d("연구 기록: 보존 기한 지난 파일 ${n}개 지움")
+        } }
+    }
+
+    /** 파일 첫 줄(세션 머리): 참가자 공변량·형식. 전원이 끊겨 첫 줄을 잃은 파일을 이어 쓸 때는 rewritten=true 로 다시 쓴다(V-12) */
+    private fun headRecord(sid: String, p: Profile, now: Long, rewritten: Boolean): JSONObject =
+        JSONObject().put("rec", "session").put("format", FORMAT).put("session", sid)
+            .put("app", BuildConfig.APPLICATION_ID).put("version", BuildConfig.VERSION_NAME).put("build", BuildConfig.VERSION_CODE)
+            .put("ts", now).put("iso", iso(now)).put("tz", ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(now)).id)
+            .put("participant", JSONObject().put("age_band", p.ageBand).put("driving_years", p.drivingYears).put("car_type", p.carType)
+                .put("consent", p.consent).put("consent_version", CONSENT_VERSION).put("consent_ts", p.consentAt).put("consent_source", p.source))
+            .put("window", JSONObject().put("pre_s", PRE_S).put("post_s", POST_S).put("hz", 1))
+            .put("route", JSONObject().put("name", "gyeongbu_southbound_demo").put("distance_scale", ai.meeos.tago.engine.LinkHub.DEMO_SCALE))
+            .put("sensors", JSONObject().put("imu", imuType ?: JSONObject.NULL).put("gps", gpsOn).put("turn_signal", true))
+            .put("advice_policy", JSONObject().put("mode", "uniform").put("kmh", ai.meeos.tago.engine.LinkHub.ADVISE_KMH))
+            .apply { if (rewritten) put("head_rewritten", true) }
+
     /** 앱이 다시 열리면(프로세스 재시작) 동의한 세션을 이어 쓴다 */
     fun restore() {
+        purgeOld()
         val sid = prefs.getString("session", null) ?: return
         val p = Profile(prefs.getString("age", "") ?: "", prefs.getInt("years", 0), prefs.getString("car", "") ?: "", true, prefs.getLong("consentAt", 0L), prefs.getString("source", "screen") ?: "screen")
         sessionId = sid; profile = p
         warningsDone = prefs.getInt("done", 0)
+        // 전원이 끊겨 첫 줄(세션 머리)이 사라진 파일(0 바이트가 되는 것을 에뮬레이터에서 확인, V-12): 이어 쓰기 전에 머리를 설정에 저장해 둔 값으로 다시 쓴다
+        if (StudyFileCheck.headMissing(file)) append(listOf(headRecord(sid, p, prefs.getLong("consentAt", 0L).takeIf { it > 0 } ?: System.currentTimeMillis(), rewritten = true)))
         append(listOf(JSONObject().put("rec", "session_resume").put("session", sid).put("ts", System.currentTimeMillis()).put("iso", iso(System.currentTimeMillis()))))
         startSensors()
         s.log.d("연구 기록 이어서"); s.log.demo("연구 기록 세션 $sid")
@@ -117,20 +143,11 @@ class ResponseLog(private val context: Context, private val s: Services) {
         if (active) stop()
         val sid = randomId()
         sessionId = sid; profile = p; warningsDone = 0; wid = 0
+        purgeOld()
         prefs.edit().putString("session", sid).putString("age", p.ageBand).putInt("years", p.drivingYears).putString("car", p.carType)
             .putLong("consentAt", p.consentAt).putString("source", p.source).putInt("wid", 0).putInt("done", 0).apply()
         startSensors()
-        val now = System.currentTimeMillis()
-        val head = JSONObject().put("rec", "session").put("format", FORMAT).put("session", sid)
-            .put("app", BuildConfig.APPLICATION_ID).put("version", BuildConfig.VERSION_NAME).put("build", BuildConfig.VERSION_CODE)
-            .put("ts", now).put("iso", iso(now)).put("tz", ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(now)).id)
-            .put("participant", JSONObject().put("age_band", p.ageBand).put("driving_years", p.drivingYears).put("car_type", p.carType)
-                .put("consent", p.consent).put("consent_version", CONSENT_VERSION).put("consent_ts", p.consentAt).put("consent_source", p.source))
-            .put("window", JSONObject().put("pre_s", PRE_S).put("post_s", POST_S).put("hz", 1))
-            .put("route", JSONObject().put("name", "gyeongbu_southbound_demo").put("distance_scale", ai.meeos.tago.engine.LinkHub.DEMO_SCALE))
-            .put("sensors", JSONObject().put("imu", imuType ?: JSONObject.NULL).put("gps", gpsOn).put("turn_signal", true))
-            .put("advice_policy", JSONObject().put("mode", "uniform").put("kmh", ai.meeos.tago.engine.LinkHub.ADVISE_KMH))
-        append(listOf(head))
+        append(listOf(headRecord(sid, p, System.currentTimeMillis(), rewritten = false)))
         s.log.d("연구 기록 시작"); s.log.demo("연구 기록 세션 $sid (${p.ageBand}, ${p.drivingYears}년, ${p.carType})")
     }
 
@@ -186,6 +203,9 @@ class ResponseLog(private val context: Context, private val s: Services) {
     // ------------------------------------------------------------ 이벤트(메인 스레드)
 
     fun touch() { if (!active) return; touches++; event("touch", null) }
+
+    /** 운전자가 정차 중에 남긴 표시(예: [경고 틀림], 2026-11-13). 기록만 — 판정·경고에는 쓰이지 않는다 */
+    fun driverFlag(kind: String, hazardId: String) { if (active) event("driver_flag", JSONObject().put("kind", kind).put("hazard", hazardId)) }
 
     fun appVisible(fg: Boolean) { if (!active || fg == appFg) return; appFg = fg; event(if (fg) "app_fg" else "app_bg", null) }
 
@@ -393,7 +413,8 @@ class ResponseLog(private val context: Context, private val s: Services) {
     private fun append(lines: List<JSONObject>) {
         val f = file ?: return
         val text = lines.joinToString("\n", postfix = "\n") { it.toString() }
-        writer.execute { runCatching { f.appendText(text, Charsets.UTF_8) }.onFailure { s.main.post { s.log.d("연구 기록 쓰기 실패: ${it.message}") } } }
+        // 쓴 뒤 fsync(V-12): 전원이 끊겨도 마지막 줄·머리 줄이 사라지지 않게. 쓰기는 드물고 별도 스레드라 비용은 무시할 만하다
+        writer.execute { runCatching { java.io.FileOutputStream(f, true).use { o -> o.write(text.toByteArray(Charsets.UTF_8)); o.flush(); o.fd.sync() } }.onFailure { s.main.post { s.log.d("연구 기록 쓰기 실패: ${it.message}") } } }
     }
 
     /** 다 쓴 뒤에 콜백(파일 핸들 순서를 지키려고 같은 스레드에서) */

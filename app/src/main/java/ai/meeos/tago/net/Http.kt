@@ -11,9 +11,11 @@ object Http {
     /**
      * 본문을 읽어 돌려준다. 4xx·5xx 는 HttpURLConnection 이 던지는 그대로(IOException).
      * @param requireOk true 면 본문을 읽기 전에 상태가 200 인지 보고, 아니면 IllegalStateException("HTTP n")
+     * @param emptyOn204 true 면 204(내용 없음)는 본문을 읽지 않고 빈 문자열 — 본문 없는 응답을 읽다 나는 예외를 '실패'로 보지 않게
      */
     fun text(url: String, method: String = "GET", body: ByteArray? = null, headers: Map<String, String> = emptyMap(),
-             connectMs: Int, readMs: Int, requireOk: Boolean = false): String = open(url, method, body, headers, connectMs, readMs) { c ->
+             connectMs: Int, readMs: Int, requireOk: Boolean = false, emptyOn204: Boolean = false): String = open(url, method, body, headers, connectMs, readMs) { c ->
+        if (emptyOn204 && c.responseCode == 204) return@open ""
         if (requireOk && c.responseCode != 200) error("HTTP ${c.responseCode}")
         c.inputStream.bufferedReader().use { it.readText() }
     }

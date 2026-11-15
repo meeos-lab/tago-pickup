@@ -2,4 +2,6 @@
 <resources>
     <!-- 앱 아이콘 바탕: 순정 독 아이콘(차·내비·전화) 판과 같은 짙은 회색(에뮬레이터 캡처 실측) -->
     <color name="ic_launcher_bg">#3A3A3A</color>
+    <!-- 색 그림 아이콘의 바탕: 그림 바탕과 같은 짙은 초록(그림 귀퉁이 실측) -->
+    <color name="ic_launcher_bg_green">#01372A</color>
 </resources>

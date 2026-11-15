@@ -3,6 +3,7 @@ package ai.meeos.tago.engine
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -28,10 +29,38 @@ class LinkHub(routeJson: String) {
     private val cum = DoubleArray(route.size).also { c -> for (i in 1 until route.size) c[i] = c[i - 1] + hypot(route[i].first - route[i - 1].first, route[i].second - route[i - 1].second) }
     val length = cum.last()
 
+    /** 방향 구분 스위치(11-14): 끄면 방향을 보지 않는다 — 예전 동작 그대로 */
+    @Volatile var dirAware = true
+    /** 도로 구분(경로 파일 classes, 선택): motorway = 고속도로·자동차전용(중앙분리), road = 일반 도로. 없거나 덮이지 않은 자리는 motorway(시연 경로 = 고속도로) */
+    class RoadClass(val s0: Double, val s1: Double, val cls: String)
+    val classes: List<RoadClass> = file.optJSONArray("classes")?.let { a ->
+        (0 until a.length()).map { a.getJSONObject(it).let { c -> RoadClass(c.getDouble("s0"), c.getDouble("s1"), c.getString("cls")) } }
+    } ?: emptyList()
+    fun motorwayAt(s: Double): Boolean = classes.firstOrNull { s >= it.s0 && s <= it.s1 }?.cls != "road"
+    /** 경로의 그 자리 진행 방위(도, 정북 0·시계 방향) */
+    fun bearingAt(s0: Double): Double {
+        val s = s0.coerceIn(0.0, length)
+        var i = 0
+        while (i < cum.size - 2 && cum[i + 1] < s) i++
+        val a = route[i]; val b = route[i + 1]
+        return (Math.toDegrees(atan2(b.first - a.first, b.second - a.second)) + 360.0) % 360.0
+    }
+    private fun known(d: Int) = d == 1 || d == -1
+    /** 보는 차(방향 dv)에게 이 방향(d)·이 자리(s)의 일을 어떻게 보일까: null = 지금 그대로, "drop" = 안 보임(고속도로 맞은편), "oncoming"·"unsure" = 낮은 단계 */
+    private fun sideOf(d: Int, s: Double, dv: Int): String? = when {
+        !dirAware -> null
+        d == DIR_UNSURE -> "unsure"
+        known(d) && d != dv -> if (motorwayAt(s)) "drop" else "oncoming"
+        else -> null
+    }
+    private fun viewDir(c: Car?): Int = if (dirAware) c?.dir?.takeIf { known(it) } ?: 1 else 1
+
     fun project(p: Pair<Double, Double>): Double = projectD(p).first
 
     /** 위경도 → 경로 선까지 횡거리(m) — 허브의 휴게소 제외(off)와 같은 투영. 차 안의 경로 이탈 판정(OffRouteSensor)이 쓴다 */
     fun lateral(lat: Double, lon: Double): Double = projectD(xy(lat, lon)).second
+    /** 위경도를 경로 위 자리(m)로 — 경로에서 떨어진 거리는 lateral */
+    fun sAt(lat: Double, lon: Double): Double = project(xy(lat, lon))
 
     /** 점 → (경로 위 거리 s, 경로까지 거리 d) — 경로 밖(다른 도로)의 공식 돌발을 거를 때 d 를 쓴다 */
     fun projectD(p: Pair<Double, Double>): Pair<Double, Double> {
@@ -82,6 +111,13 @@ class LinkHub(routeJson: String) {
         } }.sortedBy { it.s }
     } ?: emptyList()
 
+    /** 긴급차량 예상 경로(새 기능 I): 응급의료기관으로 나가는 나들목(build_er_exits.py — 공식 자료로 확인한 기관만). 없으면 기능이 꺼진다. PC 허브 ER_EXITS 와 같다 */
+    class ErExit(val name: String, val nameEn: String, val s: Double)
+
+    val erExits: List<ErExit> = file.optJSONArray("erExits")?.let { a ->
+        (0 until a.length()).map { i -> a.getJSONObject(i).let { e -> ErExit(e.getString("name"), e.getString("nameEn"), e.getDouble("s")) } }.sortedBy { it.s }
+    } ?: emptyList()
+
     val rest: List<Rest> = run {
         val out = mutableListOf<Rest>()
         val a = file.getJSONArray("restAreas")
@@ -122,7 +158,6 @@ class LinkHub(routeJson: String) {
         const val FAST_MS = 16.7
         const val STOP_MS = 1.4
         const val INCIDENT_HOLD = 30.0
-        const val INCIDENT_NEAR = 300.0
         val TTL = mapOf("HARD_BRAKE" to 300.0, "CONGESTION" to 120.0, "INCIDENT" to 900.0, "HEAVY_RAIN" to 600.0, "ICING" to 900.0,
             "BLOCKED" to 1200.0, "DEBRIS" to 900.0, "SMOKE" to 600.0, "DOWNHILL" to 1800.0, "SIREN" to 30.0, "CHARGER_FAULT" to 3600.0, "CHARGER_WAIT" to 3600.0)
         val MERGE = mapOf("DEBRIS" to 300.0, "SIREN" to 3000.0, "CHARGER_FAULT" to 500.0, "CHARGER_WAIT" to 500.0)   // 종류별 묶는 거리(없으면 MERGE_M). 낙하물은 좁게, 긴급차량은 움직이니 넓게
@@ -142,7 +177,7 @@ class LinkHub(routeJson: String) {
         const val STATION_NEAR = 100.0
         // 충전기 공식 상태(한국환경공단 충전소 정보 stat: 0 알수없음 1 통신이상 2 충전대기 3 충전중 4 운영중지 5 점검중 6 예약중 9 상태미확인 — OpenAPI 활용가이드 v1.25 3.2절).
         // 4·5 만 '안 됨'으로 센다(1·9 는 통신 문제일 수 있어 세지 않는다). 받은 지 30분 넘은 상태는 버린다(근거 미기재 — 상태 조회 기간 최대 10분의 3배)
-        val CHG_DOWN = setOf(4, 5)
+        const val CHG_HALT = 4; const val CHG_CHECK = 5; const val CHG_UNKNOWN = 9   // 운영중지·점검중(셈)·상태미확인(통신 문제일 수 있어 세지 않는다)
         const val CHG_OFFICIAL_TTL = 1800.0
         val CHARGE_SYM = listOf("no_start", "screen_off", "payment", "connector", "notice")
         val SYM_KO = mapOf("no_start" to "충전 시작 안 됨", "screen_off" to "화면 꺼짐", "payment" to "결제 안 됨", "connector" to "커넥터 파손", "notice" to "'고장' 안내문")
@@ -183,16 +218,30 @@ class LinkHub(routeJson: String) {
         const val SIREN_RANGE = 2000.0           // 내 뒤 2km 안에서 다가올 때만 알린다
         const val SIREN_NEAR = 500.0             // 500m 안이면 한 번 더(짧게) 말한다
         const val SIREN_TRACK = 60.0             // 최근 60초의 onset으로 속도를 잰다
+        // 방향 구분(11-14, 사용자 "고속도로는 상행과 하행이 있으니까 … 경고 마커 구분"): 차의 방향 = 경로 위 s 가 느는지 주는지(DIR_MIN_M 넘게 움직인 뒤),
+        // 또는 차가 보낸 방위(hdg)와 그 자리 경로 방위의 차(DIR_SAME_DEG 안 = 같은 방향, DIR_OPP_DEG 밖 = 맞은편, 그 사이 = 애매). link_server.py 와 같은 값
+        const val DIR_MIN_M = 20.0; const val DIR_SAME_DEG = 60.0; const val DIR_OPP_DEG = 120.0
+        const val DIR_UNSURE = 2                 // 방향 값: +1 경로 방향 · −1 거꾸로 · 0 모름 · 2 애매(근거가 엇갈림)
+        val DIR_TYPES = setOf("HARD_BRAKE", "CONGESTION", "INCIDENT", "DEBRIS", "DOWNHILL")   // 한쪽 차로의 일(방향을 가르는 종류). 비·안개·결빙·되돌아감·충전기는 양쪽 모두의 일
+        val SIDE_KO = mapOf("oncoming" to "맞은편", "unsure" to "방향 불확실"); val SIDE_EN = mapOf("oncoming" to "Oncoming", "unsure" to "Direction unclear")
         const val SIREN_MIN_DT = 3.0             // onset 두 개가 3초 이상 떨어져야 방향을 안다(반대 차로는 거꾸로 움직여 걸러진다)
         const val SIREN_EXTRAP = 15.0            // 마지막 onset 뒤 최대 15초까지 속도로 앞으로 민다
         const val SIREN_ETA_MAX = 90.0           // 통과 예상 시간은 90초 안일 때만 말한다
         // 긴급차량 위치 신호(비컨, docs/dev/40-algorithms.md A-13): 서버와 같은 값. 구급차가 kind "ev" + 토큰으로 들어와 위치·속도·목적지(dest_s)·출동 여부(on)를 보낸다
-        const val EV_TOKEN = "meeos-ev-demo"     // 시연용 기본 토큰(LinkHub.evToken 으로 바꿀 수 있다). 틀리면 403
+        // 비컨 토큰 값은 저장소 코드에 없다(2026-11-13, docs/dev/83 S4): 빌드 때 BuildConfig.EV_TOKEN(-Pmeeos.evToken → 환경변수 TAGO_EV_TOKEN → ev_token.local), 없으면 실행마다 무작위. 틀리면 403
+        // 비컨 차종(긴급자동차 — 진로 양보 의무는 차종과 무관해 판단·우선순위는 같고 문구만 다르다). 기본·모르는 값 = ambulance. 서버(link_server.VTYPES)와 같다
+        val VTYPES = listOf("ambulance", "fire", "police")
+        val VEH_KO = mapOf("ambulance" to "구급차", "fire" to "소방차", "police" to "경찰차")
+        val VEH_EN = mapOf("ambulance" to "Ambulance", "fire" to "Fire truck", "police" to "Police car")
         const val EV_RANGE = 5000.0              // 위치가 정확하므로 뒤 5 km 까지(그 너머는 사이 나들목에서 빠질 수 있다 — 이 1차원 모델은 나들목을 모른다)
         const val EV_TRACK = 10.0                // 비컨 속도: 최근 10초 위치로
         const val EV_MOVE = 2.0                  // 경로 위 ±2 m/s 를 넘어야 앞으로/거꾸로
         const val EV_STALE = 15.0                // 15초 넘게 소식 없는 비컨은 꺼진 것
         const val EV_DEST_MARGIN = 300.0         // 목적지를 300 m 넘게 지난 차에는 알리지 않는다(예상 경로 밖)
+        // 긴급차량 예상 경로(새 기능 I, 40 A-13c): 같은 방향 WAVE_PERSIST 초 넘게 이어진 물결·마이크 추정이면 앞쪽 응급실 나들목까지(긴급차량에서 FAR_MAX 안) 화면에만 약한 안내
+        const val WAVE_PERSIST = 20.0
+        const val FAR_MAX = 15000.0
+        const val FAR_MARGIN = 300.0
         const val EV_ETA_MIN_MAX = 600.0         // 비컨: 90초 넘는 통과 예상은 10분 안일 때만 분으로
         // 길 터 주기 물결(A-13b): 서버와 같은 값
         const val YIELD_WINDOW = 60.0
@@ -209,6 +258,9 @@ class LinkHub(routeJson: String) {
         const val REST_AHEAD = 1000.0
         const val ACTIVE_SEC = 60.0
         const val CLOCK_SKEW_SEC = 30.0          // 요청 t 가 '허브 시각 + 실제 경과'와 이보다 크게 어긋나면 창엔 수신 시각, 보기에 clockSkew(ADR-43)
+        const val PARK_TEXT_MAX = 40             // 차가 보낸 주차 글("B2 · D-14", 좌표 없음) 길이 상한 — 가족 휴대폰 그룹 화면에만
+        /** 주차 글 정리: 글자·숫자·공백·'·~-()' 만, 앞뒤 공백 없이 PARK_TEXT_MAX 자까지. 글이 아니거나 비면 null(PC 허브 park_text 와 같다) */
+        fun parkText(v: Any?): String? = (v as? String)?.filter { it.isLetterOrDigit() || it in " ·~-()" }?.trim()?.take(PARK_TEXT_MAX)?.trim()?.ifEmpty { null }
         const val LIMIT_MAX = 200                // 차가 보낸 제한속도(km/h)로 받는 상한(ADR-44)
         const val MI_M = 1609.344                // 영어 거리 글의 마일(지역 단위 "mi", ADR-45)
         const val FT_M = 0.3048
@@ -240,6 +292,9 @@ class LinkHub(routeJson: String) {
         const val NAME_MAX = 20                  // 사람이 적는 이름·차 설명 글자 수(제어 문자는 뺀다)
         const val CAR_MAX = 40
         const val KIND_MAX = 12
+        const val PARK_PHOTO_MAX = 60_000        // 주차 기둥 사진(새 기능 H): base64 글자 수 상한(요청 본문 64 KB 안)
+        const val PARK_PHOTO_TTL = 300.0         // 허브 시각 기준 보관 초
+        val PARK_B64 = Regex("[A-Za-z0-9+/]+={0,2}")
         val PRIORITY = mapOf("OFFICIAL" to 0, "SIREN" to -1, "INCIDENT" to 0, "BLOCKED" to 1, "HARD_BRAKE" to 2, "DEBRIS" to 3, "ICING" to 4, "SMOKE" to 5, "DOWNHILL" to 6,
             "CONGESTION" to 7, "HEAVY_RAIN" to 8, "CHARGER_FAULT" to 9, "CHARGER_WAIT" to 10)   // 긴급차량 양보가 가장 먼저
         val TYPE_KO = mapOf("OFFICIAL" to "도로 정보", "HARD_BRAKE" to "급제동", "CONGESTION" to "정체", "INCIDENT" to "사고 의심", "HEAVY_RAIN" to "폭우", "ICING" to "결빙 위험",
@@ -270,8 +325,9 @@ class LinkHub(routeJson: String) {
         val DEMO_CARS = listOf(Triple("anon", -2500.0, 24.0), Triple("anon", -1200.0, 25.5), Triple("anon", 1500.0, 23.5), Triple("anon", 2600.0, 26.0),
             Triple("anon", 3700.0, 24.5), Triple("anon", 4600.0, 25.0), Triple("anon", 5300.0, 24.0), Triple("anon", 5800.0, 25.0), Triple("anon", 6200.0, 24.0),
             Triple("crash", 6400.0, 0.0), Triple("crash", 6420.0, 0.0), Triple("anon", 7600.0, 25.0), Triple("anon", 9600.0, 24.5), Triple("anon", 11500.0, 25.0))
-        class Fam(val ko: String, val en: String, val car: String, val carEn: String, val off: Double, val free: Double, val soc: Int?)
-        val DEMO_FAMILY = listOf(Fam("삼촌", "Uncle", "아반떼 · 흰색", "white Avante", 3000.0, 25.0, 41), Fam("이모", "Aunt", "쏘렌토 · 검정", "black Sorento", -1500.0, 24.0, null))
+        // park: 경로 끝(목적지)에 서면 내는 주차 글 — 시연 값(층·기둥만). 일행의 주차 글이 화면에 보이는 장면에 쓴다(11-14)
+        class Fam(val ko: String, val en: String, val car: String, val carEn: String, val off: Double, val free: Double, val soc: Int?, val park: String)
+        val DEMO_FAMILY = listOf(Fam("삼촌", "Uncle", "아반떼 · 흰색", "white Avante", 3000.0, 25.0, 41, "B2 · D-11"), Fam("이모", "Aunt", "쏘렌토 · 검정", "black Sorento", -1500.0, 24.0, null, "B2 · E-3"))
         // 구급차: AMB_K초에 정체 꼬리 뒤에서 나타나 사고 지점으로. 근처(HEAR_M) Tago 차의 마이크가 사이렌을 듣고 5초마다 보고한다.
         // 같이 나타나는 모르는 Tago 차 5대가 구급차 바로 앞을 달린다. 사고 지점에 닿으면 사이렌을 끈다
         const val AMB_K = 50
@@ -337,7 +393,7 @@ class LinkHub(routeJson: String) {
         }
 
         /** 응답 헤더(Content-Type·Retry-After) — 허브 오류(type 있음)는 problem+json, 429 는 Retry-After = retryAfter 초.
-         *  서버 response_headers 와 같다. 앱은 LocalServer 가 헤더를 고정으로 써서 아직 이 함수를 부르지 않는다(51 2.5, 연결은 후속) */
+         *  서버 response_headers 와 같다. 앱 내장 서버 LocalServer 가 허브 응답(`hubJson`)에 이 헤더를 붙인다(51 2.5, 11-09) */
         fun responseHeaders(o: JSONObject): Map<String, String> = buildMap {
             put("Content-Type", if (o.has("type")) PROBLEM_MEDIA else "application/json; charset=utf-8")
             if (o.has("retryAfter") && !o.isNull("retryAfter")) put("Retry-After", o.get("retryAfter").toString())
@@ -427,10 +483,11 @@ class LinkHub(routeJson: String) {
         fun langOf(x: String) = if (x == "en") "en" else "ko"
     }
 
-    class Demo(val kind: String, val free: Double)
+    class Demo(val kind: String, val free: Double, val park: String? = null)
     /** id: 그 차의 열쇠(본인에게만), pub: 남에게 보이는 이름표 */
     class Car(val id: String, val pub: String, var name: String, var car: String, val kind: String, val lang: String, val demo: Demo?) {
         var s: Double? = null; var speed = 0.0; var soc: Any? = null; var wiper = ""; var temp: Any? = null; var t = 0.0
+        var park: String? = null   // 주차 글(층·기둥만) — 그룹 화면에 그대로
         var slowSince: Double? = null; var stopSince: Double? = null; var brake: Pair<Double, Double>? = null
         val active = mutableSetOf<String>(); var group: String? = null
         var holdSince: Double? = null; var gone = false; var tunnel = false   // holdSince: null / 시작 시각 / -1.0(이미 보고)
@@ -438,7 +495,10 @@ class LinkHub(routeJson: String) {
         var off: Double? = null; var offHint: Boolean? = null; val acks = mutableMapOf<String, String>()   // offHint: 차가 보낸 경로 이탈(위경도가 없을 때 휴게소 제외)   // off: 위경도의 경로까지 거리(m), acks: 막힘 위험 id → 우회 권고 수락·거절
         var inc: Inc? = null; var joinT = 0.0; var strongAt: Double? = null; var strongH: String? = null   // 사고 판단 창·세션 시작·강한 확정 기록
         var on = false; var dest: Double? = null; var bt = listOf<Pair<Double, Double>>(); var yieldAt: Double? = null   // 긴급차량(kind "ev") 출동 여부·목적지·최근 위치, 시연 차가 비킨 시각
+        var vtype = "ambulance"   // 비컨(kind ev) 차종: ambulance·fire·police
         var units = "km"; var limit: Int? = null; var skew: Int? = null   // 거리 단위(join), 순정 내비 제한속도 km/h, 시계 오차(초, 없으면 null)
+        var sdir = 0; var hdir = 0; var dirS: Double? = null   // 방향 구분: s 증감으로 안 방향·방위로 안 방향(+1·−1·2 애매·0 모름), 방향을 잰 기준 자리
+        val dir: Int get() = when { sdir != 0 && hdir != 0 && hdir != sdir -> 2; sdir != 0 -> sdir; else -> hdir }
         var with: String? = null   // 동승(ADR-47): 위치 없는 참가자가 '이 차에 타요'로 고른 일행 차 id — 보기는 그 차 기준
     }
     /** 아직 위험에 붙지 않은 YIELD(또는 위험에 붙은 것): 시각·위치·경로 위 속도·차 */
@@ -455,6 +515,8 @@ class LinkHub(routeJson: String) {
         val ev = mutableMapOf<String, List<String>>(); val score = mutableMapOf<String, Int>(); val passed = mutableSetOf<String>()   // 사고 판단: 차별 근거·점수, 통과 차
         var beacon: String? = null                     // 긴급차량: 묶인 비컨 차
         val yields = sortedMapOf<String, Y>()          // 긴급차량: 비킨 차(YIELD)
+        var dirSince: Double? = null                   // 긴급차량: 같은 방향(앞으로)으로 이어서 달린 시작 시각(넓힌 안내)
+        var dir = 0                                    // 방향 구분: 알린 차의 방향(+1·−1·2 애매·0 모름). DIR_TYPES 만 채운다
     }
     /** 충전기 고장 위험의 차별 기록: 실패한 자리(s), 차 실패 보고·사람 신고·자리 옮겨 충전한 거리, 설문 답(모름 = null) */
     class ChargeNote(var spot: Double) {
@@ -474,6 +536,7 @@ class LinkHub(routeJson: String) {
         var wrong = 0                                    // 이 코드가 살아 있는 동안 도로 전체에서 틀린 횟수
         val members = mutableListOf<String>()
         var rest: JSONObject? = null
+        var parkPhoto: Pair<String, Double>? = null      // 주차 기둥 사진 한 장(base64, 올린 허브 시각) — 차가 가져가면 지운다
         var answers = linkedMapOf<String, Boolean>()
         val log = mutableListOf<Pair<String, String>>()
         var demo = false
@@ -492,7 +555,8 @@ class LinkHub(routeJson: String) {
         var state = if (type == "rest") "proposed" else "pending"
         var how: String? = null; var doneBy = ""; var at: Double? = null
     }
-    class WorldDemo(val t0: Double, val s0: Double, val ems: Set<String>) { var k = 0; var entries = 0; var amb: Amb? = null }
+    /** core: 시연 각본 '핵심만' — 사고·정체·구급차만(비·낙하물·내리막·터널·침수 사건 없음). 시연 한 바퀴 녹화용, 기본 false */
+    class WorldDemo(val t0: Double, val s0: Double, val ems: Set<String>, val core: Boolean = false) { var k = 0; var entries = 0; var amb: Amb? = null }
     /** 코드 틀린 횟수(차 하나, 휴대폰 참가는 "" 한 칸) */
     class Try { var n = 0; var until = 0.0 }
     /** 코드로 합류한 결과: 그룹과 차, 또는 까닭("code"·"locked"·"full") */
@@ -517,8 +581,8 @@ class LinkHub(routeJson: String) {
     private var seq = 0
     private var demo: WorldDemo? = null
     private val yields = mutableListOf<Y>()          // 아직 위험에 붙지 않은 YIELD
-    /** 긴급차량 비컨 토큰(시연 기본 EV_TOKEN) */
-    var evToken = EV_TOKEN
+    /** 긴급차량 비컨 토큰. 기본은 이 실행만 쓰는 무작위 값 — MainActivity 가 빌드에 넣은 값(BuildConfig.EV_TOKEN)이 있으면 그것으로 바꾼다 */
+    var evToken: String = run { val r = java.security.SecureRandom(); (1..16).map { "0123456789abcdef"[r.nextInt(16)] }.joinToString("") }
     private val rng = java.security.SecureRandom()
     private fun rid(n: Int, chars: String = "0123456789abcdef") = (1..n).map { chars[rng.nextInt(chars.length)] }.joinToString("")
 
@@ -537,7 +601,7 @@ class LinkHub(routeJson: String) {
         }
         var id: String; do { id = "c" + rid(12) } while (car(id) != null)
         var pub: String; do { pub = "v" + rid(8) } while (cars.any { it.pub == pub })
-        return Car(id, pub, name, desc, kind, lang, demo).also { it.t = now; it.joinT = now; cars += it }
+        return Car(id, pub, name, desc, kind, lang, demo).also { it.t = now; it.joinT = now; if (demo != null) it.sdir = 1; cars += it }
     }
 
     /** 밖으로 내보내는 차 id: 나에게는 내 id, 남의 차는 보기용 이름표(pub) — 남의 id로 위치·보고를 보낼 수 없게 */
@@ -616,7 +680,7 @@ class LinkHub(routeJson: String) {
     fun joinRoad(b: JSONObject): Car? {
         clock(b)
         return newCar(clean(str(b, "name"), NAME_MAX), clean(str(b, "car"), CAR_MAX), clean(str(b, "kind"), KIND_MAX).ifEmpty { "pleos" }, langOf(str(b, "lang")))
-            ?.also { it.units = unitsOf(str(b, "units")) }
+            ?.also { it.units = unitsOf(str(b, "units")); it.vtype = str(b, "vtype").takeIf { v -> v in VTYPES } ?: "ambulance" }
     }
 
     fun state(b: JSONObject) {
@@ -637,8 +701,15 @@ class LinkHub(routeJson: String) {
         if (b.has("soc") && !b.isNull("soc")) c.soc = b.get("soc")
         if (b.has("temp") && !b.isNull("temp")) c.temp = b.get("temp")
         if (b.has("wiper") && !b.isNull("wiper")) c.wiper = b.get("wiper").toString()
+        if (b.has("park")) c.park = parkText(b.opt("park"))   // 주차 글(좌표 없음). null·빈 글 = 지움
         if (b.has("limit")) c.limit = (b.opt("limit") as? Number)?.toDouble()?.takeIf { it > 0 && it <= LIMIT_MAX }?.toInt()   // 순정 내비 제한속도(km/h). 0 이하·LIMIT_MAX 초과·숫자 아님 = 모름
+        (b.opt("hdg") as? Number)?.toDouble()?.takeIf { it.isFinite() }?.let { h -> c.s?.let { s ->   // 차가 보낸 방위(선택): 멈춘 차도 방향을 가른다
+            val d = abs(((h - bearingAt(s)) % 360.0 + 540.0) % 360.0 - 180.0)
+            c.hdir = if (d <= DIR_SAME_DEG) 1 else if (d >= DIR_OPP_DEG) -1 else DIR_UNSURE
+        } }
         c.s?.let { s ->                                   // 경로 위 실제 이동 속도(시연은 압축된 거리 기준) — 긴급차량과 가까워지는 속도에 쓴다
+            val d0 = c.dirS                               // 방향: 기준 자리에서 DIR_MIN_M 넘게 움직였으면 그 부호(멈춘 차는 마지막 방향 그대로)
+            if (d0 == null) c.dirS = s else if (abs(s - d0) >= DIR_MIN_M) { c.sdir = if (s > d0) 1 else -1; c.dirS = s }
             c.st?.let { (t0, s0) -> if (now > t0) c.vs = (s - s0) / (now - t0) }
             c.st = now to s
         }
@@ -714,6 +785,7 @@ class LinkHub(routeJson: String) {
         if (prevS == null || c.speed <= FAST_MS) return
         for (h in hazards) {
             if (h.type != "INCIDENT" || h.reporters.isEmpty() || c.id in h.reporters) continue
+            if (dirAware && known(h.dir) && known(c.dir) && h.dir != c.dir) continue   // 맞은편 차로를 지나간 차
             if ((prevS < h.s && h.s <= s) || abs(s - h.s) <= INC_NEAR) {
                 h.passed += c.id
                 val reporterStopped = h.reporters.keys.any { r -> car(r)?.let { x -> x.speed < STOP_MS && abs((x.s ?: -9e9) - h.s) <= INC_NEAR } == true }
@@ -743,7 +815,7 @@ class LinkHub(routeJson: String) {
             val ch = st.optJSONArray("chargers") ?: continue
             if (id.isEmpty()) continue
             val m = linkedMapOf<String, Int>()
-            for (j in 0 until minOf(ch.length(), 99)) { val c = ch.optJSONObject(j) ?: continue; m[str(c, "id").take(4)] = c.optInt("stat", 9) }
+            for (j in 0 until minOf(ch.length(), 99)) { val c = ch.optJSONObject(j) ?: continue; m[str(c, "id").take(4)] = c.optInt("stat", CHG_UNKNOWN) }
             chgOfficial[id] = now to m
         }
     }
@@ -753,7 +825,7 @@ class LinkHub(routeJson: String) {
         val rows = (chgStatIds[restS] ?: return null).mapNotNull { chgOfficial[it] }.filter { now - it.first <= CHG_OFFICIAL_TTL }
         if (rows.isEmpty()) return null
         val st = rows.flatMap { it.second.values }
-        val halt = st.count { it == 4 }; val check = st.count { it == 5 }
+        val halt = st.count { it == CHG_HALT }; val check = st.count { it == CHG_CHECK }
         return if (halt + check == 0) null else ChgOff(st.size, halt + check, halt, check, rows.maxOf { it.first })
     }
     private fun chgKind(lang: String, o: ChgOff) = when {
@@ -890,6 +962,11 @@ class LinkHub(routeJson: String) {
     private fun derive(c: Car) {
         val s = c.s ?: return
         val v = c.speed
+        if (v < STOP_MS && c.park != null) {                      // 주차했다고 알린 차(주차 글이 있다)도 정체·사고 의심의 근거가 아니다(11-14: 목적지에 먼저 주차한 일행을 '서행'으로 안내했다)
+            for (type in listOf("CONGESTION", "INCIDENT")) if (type in c.active) clear(c, type)
+            c.slowSince = null; c.stopSince = null
+            return
+        }
         if (v < STOP_MS && restNear(s) != null && inRest(c)) {   // 휴게소에 세운 차(충전·휴식)는 정체·사고 의심의 근거가 아니다
             for (type in listOf("CONGESTION", "INCIDENT")) if (type in c.active) clear(c, type)
             c.slowSince = null; c.stopSince = null
@@ -1037,16 +1114,18 @@ class LinkHub(routeJson: String) {
     private fun report(c: Car, type: String, value: String, at: Double? = null, restAt: Rest? = null): Hazard? {
         val s = at ?: c.s ?: return null
         if (type !in ONE_SHOT) c.active += type
-        pulses += JSONObject().put("t", r1(now)).put("s", rnd(s)).put("type", type).put("car", c.id).put("pub", c.pub)
+        val cd = if (dirAware && type in DIR_TYPES) c.dir else 0
+        pulses += JSONObject().put("t", r1(now)).put("s", rnd(s)).put("type", type).put("car", c.id).put("pub", c.pub).put("dir", cd)
         while (pulses.size > 40) pulses.removeAt(0)
         val merge = MERGE[type] ?: MERGE_M
-        for (h in hazards) if (h.type == type && abs((if (type == "SIREN") evPos(h).first else h.s) - s) <= merge) {
+        for (h in hazards) if (h.type == type && abs((if (type == "SIREN") evPos(h).first else h.s) - s) <= merge && !(known(cd) && known(h.dir) && h.dir != cd)) {
+            if (cd != 0 && !known(h.dir)) h.dir = cd      // 방향을 아는 보고가 오면 그 방향으로(±1 > 애매 > 모름)
             if (type == "SIREN" && c.id !in h.reporters) { h.track += now to s; h.s = s }   // 이 차가 처음 들었다 = 긴급차량이 여기 가까이 왔다
             h.cleared = null                               // 새 보고가 합쳐지면 해제 표시를 지운다(전에는 긴급차량만)
             h.reporters[c.id] = now; h.last = now; h.value = value; return h
         }
         seq++
-        val nh = Hazard("h$seq", type, s, now).also { it.reporters[c.id] = now; it.value = value; it.rest = restAt }
+        val nh = Hazard("h$seq", type, s, now).also { it.reporters[c.id] = now; it.value = value; it.rest = restAt; it.dir = cd }
         hazards += nh
         c.group?.let { groups[it] }?.let { g -> if (c.kind != "anon") glog(g, "${c.name} 차: ${TYPE_KO[type]}", "${c.name}: ${TYPE_EN[type]}") }
         return nh
@@ -1105,6 +1184,30 @@ class LinkHub(routeJson: String) {
     }
 
     /** 비컨 상태가 올 때마다: 출동 중이면 이 차에 묶인 SIREN 위험을 찾거나(3 km 안의 비컨 없는 사이렌 위험에 붙이거나) 새로 만든다. 출동 끝이면 떼어 낸다 */
+    /** 긴급차량이 같은 방향(앞으로)으로 이어서 달린 시작. 속도 모름·멈춤·거꾸로면 지운다(넓힌 안내를 거둔다). PC 허브 _dir_track 과 같다 */
+    private fun dirTrack(h: Hazard, evc: Car?, hv: Double?) {
+        val mv = if (evc != null) EV_MOVE else 0.0
+        if (hv != null && hv > mv) { if (h.dirSince == null) h.dirSince = now } else h.dirSince = null
+    }
+
+    /** 넓힌 안내(새 기능 I): 비컨 목적지가 있으면 그 목적지까지, 없으면 같은 방향 WAVE_PERSIST 초 넘게 이어진 추정의 앞쪽 가장 가까운 응급실 나들목까지. PC 허브 _far 와 같다 */
+    private fun far(h: Hazard, evc: Car?, hs: Double, myS: Double?, behind: Double, lang: String): JSONObject? {
+        val since = h.dirSince
+        if (myS == null || behind > FAR_MAX || since == null) return null
+        val dest = evc?.dest
+        if (dest != null) {
+            if (myS > dest + FAR_MARGIN) return null
+            return JSONObject().put("kind", "dest").put("toEnd", rnd(dest - myS))
+                .put("text", L(lang, "긴급차량 올 수 있음 · 목적지 방향(위치 신호)", "Emergency vehicle may come · toward its destination (beacon)"))
+        }
+        if (evc != null || now - since < WAVE_PERSIST) return null
+        val ex = erExits.firstOrNull { it.s > hs && it.s - hs <= FAR_MAX } ?: return null
+        if (myS > ex.s + FAR_MARGIN) return null
+        val nm = if (lang == "ko") ex.name else ex.nameEn
+        return JSONObject().put("kind", "er").put("exit", nm).put("toEnd", rnd(ex.s - myS))
+            .put("text", L(lang, "긴급차량 올 수 있음 · $nm 방향 추정", "Emergency vehicle may come · toward $nm (estimated)"))
+    }
+
     private fun beacon(c: Car) {
         c.s?.let { s -> c.bt = c.bt.filter { now - it.first <= EV_TRACK } + (now to s) }
         var h = hazards.firstOrNull { it.type == "SIREN" && it.beacon == c.id }
@@ -1161,6 +1264,10 @@ class LinkHub(routeJson: String) {
             val v = worldSpeed(c, k)
             c.s = c.s!! + v * DEMO_SCALE
             c.speed = v; c.t = now; c.vs = v * DEMO_SCALE   // vs: 경로 위 속도(길 터 주기 물결의 교통 흐름)
+            if (c.s!! > length) {   // 경로 끝을 지났다(짧은 실제 경로): 가족 차는 끝에서 서고, 모르는 차는 도로에서 빠진다
+                if (c.demo!!.kind == "family") { c.s = length; c.speed = 0.0; c.vs = 0.0; if (c.park == null) c.park = c.demo.park; derive(c) } else { c.gone = true; c.speed = 0.0 }
+                continue
+            }
             val rel = c.s!! - d.s0
             val inJam = rel >= JAM_TAIL && rel <= JAM_HEAD && k < JAM_END
             val wasJam = prevRel >= JAM_TAIL && prevRel <= JAM_HEAD
@@ -1168,12 +1275,12 @@ class LinkHub(routeJson: String) {
                 c.speed = JAM_MS
                 if (d.entries < BRAKE_ENTRIES) { d.entries++; ev(c, "HARD_BRAKE", "jam tail") }
             }
-            val rain = rel >= RAIN_FROM && rel <= RAIN_TO
+            val rain = !d.core && rel >= RAIN_FROM && rel <= RAIN_TO   // core: 비 없음
             if (rain != c.wiper.startsWith("CONTINUOUS")) {
                 c.wiper = if (rain) "CONTINUOUS_3" else "OFF"
                 ev(c, if (rain) "HEAVY_RAIN" else "HEAVY_RAIN_CLEARED", c.wiper)
             }
-            if (c.demo!!.kind != "crash") {
+            if (c.demo!!.kind != "crash" && !d.core) {   // core: 낙하물·내리막·터널·침수 사건 없음
                 if (prevRel < DEBRIS_S && DEBRIS_S <= rel) ev(c, "SWERVE", "steer")         // 낙하물 지점을 지나며 핸들 급회피
                 if (rel >= DOWNHILL_FROM && rel <= DOWNHILL_TO) {                          // 긴 내리막: 브레이크를 계속 밟음
                     if (c.holdSince == null) c.holdSince = now
@@ -1276,8 +1383,9 @@ class LinkHub(routeJson: String) {
         val s0 = car(str(b, "me"))?.s ?: 18000.0
         val e = b.opt("ems")
         val ems = if (e !is String || e == "" || e == "all") EMS_ALL.toSet() else e.split(Regex("[,+ ]")).filter { it in EMS_ALL }.toSet()
-        demo = WorldDemo(now, s0, ems)
+        demo = WorldDemo(now, s0, ems, b.optBoolean("core", false))
         for ((kind, off, free) in DEMO_CARS) {
+            if (s0 + off < 0 || s0 + off > length) continue   // 경로 밖(시작 전·끝 뒤)에는 차를 놓지 않는다 — 실제 경로(B-107)는 짧을 수 있다. 경부 시연(s0 18 km)에서는 해당 없음
             val c = newCar("", "", "anon", "ko", Demo(kind, free)) ?: continue
             c.s = s0 + off; c.speed = free
         }
@@ -1346,9 +1454,15 @@ class LinkHub(routeJson: String) {
         g.demo = true
         val d = demo!!
         val lang = car(str(b, "me"))?.lang ?: "ko"
+        // near: 일행을 주행 도중(휴게소 정차 등)에 만들 때 — 가족 차를 시연 시계가 아니라 부른 차의 지금 자리 기준(앞 3 km·뒤 1.5 km)에 둔다.
+        // 없으면 예전처럼 시연 시작 자리 + 그동안 달린 거리(시연을 막 시작했을 때 만드는 흐름)
+        val nearS = if ((b.opt("near") as? Boolean) == true) car(str(b, "me"))?.s else null
         for (f in DEMO_FAMILY) {
-            val c = newCar(if (lang == "ko") f.ko else f.en, if (lang == "ko") f.car else f.carEn, "pleos", lang, Demo("family", f.free)) ?: continue
-            c.s = d.s0 + f.off + f.free * DEMO_SCALE * d.k; c.speed = f.free; c.soc = f.soc; c.group = g.id
+            var at = if (nearS != null) nearS + f.off else d.s0 + f.off + f.free * DEMO_SCALE * d.k
+            if (at < 0) at = if (nearS != null) nearS - f.off else d.s0 - f.off + f.free * DEMO_SCALE * d.k   // 뒤쪽이 경로 밖(실제 경로의 출발점 앞)이면 그만큼 앞에 둔다
+            if (at > length) continue
+            val c = newCar(if (lang == "ko") f.ko else f.en, if (lang == "ko") f.car else f.carEn, "pleos", lang, Demo("family", f.free, f.park)) ?: continue
+            c.s = at; c.speed = f.free; c.soc = f.soc; c.group = g.id
             g.members += c.id
             glog(g, "${f.ko} 님이 합류했어요", "${f.en} joined")
         }
@@ -1356,7 +1470,7 @@ class LinkHub(routeJson: String) {
 
     fun rest(g: Group, b: JSONObject) {
         clock(b)
-        val c = car(str(b, "me"))
+        val c = member(g, b)   // 그룹 구성원만 제안할 수 있다(setSteps·restAnswer 와 같다)
         val group = g.members.mapNotNull { car(it) }.filter { it.s != null }
         if (c == null || group.isEmpty()) return
         val front = group.maxOf { it.s!! }
@@ -1423,6 +1537,23 @@ class LinkHub(routeJson: String) {
     }
 
     private fun member(g: Group, b: JSONObject) = car(str(b, "me"))?.takeIf { it.id in g.members }
+
+    /** 주차 기둥 사진(새 기능 H): 가족 휴대폰이 올리고(parkphoto) Pleos 차가 한 번 가져간다(parkphoto/take). 허브는 글자도 읽지 않고
+     *  그룹마다 한 장만 메모리에 5분 두며, 가져가면 지운다. PC 허브 park_photo 와 같은 규칙(대조 스크립트 run_park) */
+    private fun parkPhoto(g: Group, b: JSONObject, take: Boolean): Pair<Int, JSONObject> {
+        clock(b)
+        val c = member(g, b) ?: return 404 to JSONObject().put("error", "member")
+        if (take) {
+            if (c.kind != "pleos") return 403 to JSONObject().put("error", "kind")
+            val p = g.parkPhoto; g.parkPhoto = null
+            if (p == null || now - p.second > PARK_PHOTO_TTL) return 200 to JSONObject().put("photo", JSONObject.NULL)
+            return 200 to JSONObject().put("photo", JSONObject().put("img", p.first))
+        }
+        val img = b.opt("img") as? String
+        if (img == null || img.isEmpty() || img.length > PARK_PHOTO_MAX || !PARK_B64.matches(img)) return 400 to JSONObject().put("error", "img")
+        g.parkPhoto = img to now
+        return 200 to JSONObject().put("ok", true)
+    }
 
     /** 다음 한 단계 카드 정하기(보호자). 알 수 없는 종류는 버리고, 글자는 24자까지. 새로 정하면 앞 카드는 취소된다 */
     fun setSteps(g: Group, b: JSONObject) {
@@ -1499,11 +1630,16 @@ class LinkHub(routeJson: String) {
         val g = me?.group?.let { groups[it] }
         val mine = g?.members?.toSet() ?: emptySet()
         // 긴급차량 비컨(kind "ev")은 길벗 차가 아니다: 주변 차 수·앞길 미리보기에 넣지 않는다
-        val others = cars.filter { it.id != mid && it.id != rid && it.s != null && now - it.t <= ACTIVE_SEC && !it.gone && it.kind != "ev" }
+        val dv = viewDir(ref)                              // 보는 차의 방향(모르면 경로 방향)
+        // 방향 구분: 앞길 정체·주변 차 수는 같은 방향(또는 방향 모름) 차만 센다
+        val others = cars.filter { it.id != mid && it.id != rid && it.s != null && now - it.t <= ACTIVE_SEC && !it.gone && it.kind != "ev" && (!dirAware || !known(it.dir) || it.dir == dv) }
         val nearby = if (myS == null) 0 else others.count { abs(it.s!! - myS) <= ALERT_RANGE }
         val items = mutableListOf<Item>()
+        val sideItems = mutableListOf<Item>()               // 낮은 단계(맞은편·방향 불확실): 말하지 않고 위험도·우회·앞길 계산에도 넣지 않는다
         for (h in hazards) {
             val isSiren = h.type == "SIREN"
+            val side = if (isSiren) null else sideOf(h.dir, h.s, dv)
+            if (side == "drop") continue                     // 고속도로의 맞은편 위험: 판·고리·음성·표지 모두 없음
             val reps = h.reporters.keys.toList()
             var evc: Car? = null; var wv: Pair<Double, Double>? = null; var ny = 0
             if (isSiren) {
@@ -1546,6 +1682,7 @@ class LinkHub(routeJson: String) {
             o.put("informationQuality", if (off != null) 7 else minOf(7, incScore + reps.size))
             denm(o, h.last, expiry(h), if (isSiren) (if (evc != null) EV_RANGE else SIREN_RANGE) else ALERT_RANGE)
             if (isSiren) {
+                dirTrack(h, evc, hv)
                 // 뒤에서 다가오는 긴급차량만(반대 차로·지나간 차는 말하지 않는다). 방향을 알기 전에는 화면에만
                 val yonly = evc == null && reps.isEmpty() && wv != null
                 val mv = if (evc != null) EV_MOVE else 0.0      // 비컨은 GPS 흔들림만큼 여유를 둔다
@@ -1560,17 +1697,26 @@ class LinkHub(routeJson: String) {
                 o.put("dest", n(dest?.let { rnd(it - hs) }))      // 구급차가 목적지까지 남은 거리(예상 경로)
                 val onPath = dest == null || (myS != null && myS <= dest + EV_DEST_MARGIN)
                 o.put("onPath", onPath)
-                if (evc != null) o.put("label", L(lang, "구급차(위치 신호)", "Ambulance (position beacon)")).put("informationQuality", 7)
+                if (evc != null) o.put("vtype", evc.vtype).put("label", L(lang, "${VEH_KO.getValue(evc.vtype)}(위치 신호)", "${VEH_EN.getValue(evc.vtype)} (position beacon)")).put("informationQuality", 7)
                 else if (yonly) o.put("label", L(lang, "긴급차량 추정", "Possible emergency vehicle")).put("informationQuality", minOf(7, ny))
                 else if (ny > 0) o.put("informationQuality", minOf(7, reps.size + ny))
                 val rng = if (evc != null) EV_RANGE else SIREN_RANGE
                 if (behind != null && behind > 0 && behind <= rng) {
                     o.put("level", if (behind <= SIREN_NEAR) 2 else 1)
                     if (confirmed && hv != null && hv > mv && onPath && (evc == null || (closing != null && closing > 0)))
-                        o.put("say", if (evc != null) evSentence(lang, behind, eta) else if (yonly) yieldSentence(lang, behind)
+                        o.put("say", if (evc != null) evSentence(lang, behind, eta, evc.vtype) else if (yonly) yieldSentence(lang, behind)
                             else sirenSentence(lang, behind, named, anon, reps.size, eta))
+                } else if (behind != null && behind > rng && confirmed) {
+                    far(h, evc, hs, myS, behind, lang)?.let { o.put("far", it) }   // 넓힌 안내: 화면에만(say 없음), 약한 문구·'추정'
                 }
                 items += Item(o, rnd(hs), ahead?.let { rnd(it) }, h.id, h.type, confirmed, reps.size)
+                continue
+            }
+            if (side != null) {                              // 낮은 단계: 앞쪽 알림 범위 안일 때만 표지 + 한 줄(note), 말(say) 없음
+                if (ahead == null || ahead <= 0 || ahead > ALERT_RANGE) continue
+                o.put("side", side).put("level", 0).put("note", L(lang, "${SIDE_KO.getValue(side)} · ${TYPE_KO.getValue(h.type)} ${kmText(lang, ahead)}",
+                    "${SIDE_EN.getValue(side)} · ${TYPE_EN.getValue(h.type)} ${kmText(lang, ahead)}"))
+                sideItems += Item(o, rnd(h.s), rnd(ahead), h.id, h.type, confirmed, reps.size)
                 continue
             }
             // 폭우는 따로 말하지 않는다: 비 예보(ahead.rain)가 같은 내용을 미리 말한다
@@ -1623,7 +1769,7 @@ class LinkHub(routeJson: String) {
         val group = g?.let { groupView(it, mid, lang, myS) }
         val riskV = risk(ref, myS, items, ahead)
         return JSONObject().put("me", n(mid)).put("lang", lang).put("now", r1(now)).put("s", n(myS?.let { rnd(it) })).put("routeLength", rnd(length)).put("risk", n(riskV))
-            .put("nearby", nearby).put("hazards", JSONArray(items.map { it.o })).put("zones", zonesView(lang, ref, myS)).put("ahead", n(ahead)).put("restNext", n(restNext)).put("restHere", n(myS?.let { chargerRest(it) }?.let { if (lang == "ko") it.name else it.nameEn })).put("group", n(group))
+            .put("nearby", nearby).put("hazards", JSONArray(items.map { it.o } + sideItems.sortedWith(compareBy<Item>({ it.ahead ?: Int.MAX_VALUE }, { it.id })).map { it.o })).put("zones", zonesView(lang, ref, myS)).put("ahead", n(ahead)).put("restNext", n(restNext)).put("restHere", n(myS?.let { chargerRest(it) }?.let { if (lang == "ko") it.name else it.nameEn })).put("group", n(group))
             .put("brief", brief(lang, nearby, group, restNext)).put("demo", demo != null)
             .put("clockSkew", n(me?.skew)).put("units", curUnits)   // clockSkew: 내 시계 오차(초, 없으면 null) — 앱은 기록만
             .put("seenFrom", if (ref === me || ref == null) JSONObject.NULL else JSONObject().put("id", pid(ref, mid)).put("name", ref.name))   // 동승: 이 보기의 기준 차
@@ -1655,18 +1801,21 @@ class LinkHub(routeJson: String) {
     /** 우회 비율 p(link_server._detour_p 와 같다) = DETOUR_P_FIXED. 우회로 용량을 알게 되면 시뮬 (d) 의 clamp(여유 용량 / 도착 유량, P_MIN, P_MAX) 로 바꿀 수 있다 */
     private fun detourP(): Double = DETOUR_P_FIXED
 
-    /** 구급차 휴대폰 화면: 출동 여부·목적지까지 남은 거리·지금 알리는 차 수(뒤 5 km 안 같은 방향·목적지 앞)·마이크로 들은 차·비킨 차 */
+    /** 구급차 휴대폰 화면: 출동 여부·목적지까지 남은 거리·지금 알리는 차 수(뒤 5 km 안 같은 방향·목적지 앞)·마이크로 들은 차·비킨 차.
+     *  toldS = 알리는 차들의 경로 위 거리(이름·id 없이 자리만, 오름차순) — 구급차 지도가 노선 위 점으로 그린다(11-15 구급차 시점) */
     private fun evView(c: Car, others: List<Car>): JSONObject {
         val h = hazards.firstOrNull { it.type == "SIREN" && it.beacon == c.id }
         val live = h != null && evOf(h) != null
         val v = if (live) beaconV(c) else null
-        var told = 0
+        var toldS = emptyList<Int>()
         val cs = c.s
         if (live && v != null && v > EV_MOVE && cs != null)
-            told = others.count { x -> val d = x.s!! - cs; d > 0 && d <= EV_RANGE && (c.dest == null || x.s!! <= c.dest!! + EV_DEST_MARGIN) && v - (x.vs ?: x.speed) > 0 }
+            toldS = others.filter { x -> val d = x.s!! - cs; d > 0 && d <= EV_RANGE && (c.dest == null || x.s!! <= c.dest!! + EV_DEST_MARGIN) && v - (x.vs ?: x.speed) > 0 }
+                .map { rnd(it.s!!) }.sorted()
+        val told = toldS.size
         return JSONObject().put("on", c.on).put("live", live).put("dest", n(c.dest?.let { rnd(it) }))
             .put("toDest", n(if (c.dest == null || cs == null) null else rnd(c.dest!! - cs)))
-            .put("v", n(v?.let { r1(it) })).put("told", told).put("heard", if (live) h.reporters.size else 0)
+            .put("v", n(v?.let { r1(it) })).put("told", told).put("toldS", JSONArray(toldS)).put("heard", if (live) h.reporters.size else 0)
             .put("yielded", if (live) yieldsLive(h).size else 0)
     }
 
@@ -1721,7 +1870,7 @@ class LinkHub(routeJson: String) {
             val gap = if (myS == null || x.s == null) null else x.s!! - myS
             members.put(JSONObject().put("id", pid(x, mid)).put("name", x.name).put("car", x.car).put("kind", x.kind).put("me", x.id == mid)
                 .put("s", n(x.s?.let { rnd(it) })).put("pos", n(x.s?.let { pointAt(it) })).put("gap", n(gap?.let { rnd(it) }))
-                .put("gapMin", n(gap?.let { rnd(abs(it) / CRUISE_MS / 60) })).put("speedKmh", rnd(x.speed * 3.6)).put("soc", n(x.soc))
+                .put("gapMin", n(gap?.let { rnd(abs(it) / CRUISE_MS / 60) })).put("speedKmh", rnd(x.speed * 3.6)).put("soc", n(x.soc)).put("park", n(x.park))
                 .put("status", if (x.speed < STOP_MS) "stopped" else if (x.speed < SLOW_MS) "slow" else "moving"))
         }
         var restOut: Any = JSONObject.NULL
@@ -1848,15 +1997,16 @@ class LinkHub(routeJson: String) {
 
     /** 구급차 위치 신호: '후방 1.2km 구급차 접근 중(구급차 위치 신호). 약 40초 후 통과 예상. 진로를 양보하세요.' 500m 안은 짧게.
      *  통과 예상은 90초 안이면 초(10초 단위), 10분 안이면 분 */
-    private fun evSentence(lang: String, behind: Double, eta: Double?): String {
-        if (behind <= SIREN_NEAR) return L(lang, "후방 ${kmText(lang, behind)} 구급차 근접. 진로를 양보하세요.", "Ambulance ${kmText(lang, behind)} behind. Make way now.")
+    private fun evSentence(lang: String, behind: Double, eta: Double?, vtype: String = "ambulance"): String {
+        val ko = VEH_KO.getValue(vtype); val en = VEH_EN.getValue(vtype)
+        if (behind <= SIREN_NEAR) return L(lang, "후방 ${kmText(lang, behind)} $ko 근접. 진로를 양보하세요.", "$en ${kmText(lang, behind)} behind. Make way now.")
         val time = when {
             eta != null && eta <= SIREN_ETA_MAX -> maxOf(10, rnd(eta / 10) * 10).let { L(lang, " 약 ${it}초 후 통과 예상.", " Passing in about $it s.") }
             eta != null && eta <= EV_ETA_MIN_MAX -> maxOf(2, rnd(eta / 60)).let { L(lang, " 약 ${it}분 후 통과 예상.", " Passing in about $it min.") }
             else -> ""
         }
-        return L(lang, "후방 ${kmText(lang, behind)} 구급차 접근 중(구급차 위치 신호).$time 진로를 양보하세요.",
-            "Ambulance ${kmText(lang, behind)} behind and approaching (position beacon).$time Make way.")
+        return L(lang, "후방 ${kmText(lang, behind)} $ko 접근 중($ko 위치 신호).$time 진로를 양보하세요.",
+            "$en ${kmText(lang, behind)} behind and approaching (position beacon).$time Make way.")
     }
 
     /** 길 터 주기 물결만: '후방 1.2km 긴급차량 추정(뒤쪽 차들이 길을 비켜 주는 중). 진로를 양보하세요.' — 위치는 짐작이라 '추정' */
@@ -1903,6 +2053,7 @@ class LinkHub(routeJson: String) {
                 .put("me", c.id == mid).put("name", if (c.id in mine) c.name else "").put("stopped", c.speed < STOP_MS)
                 .put("yield", amb != null && amb.on && c.s!! - amb.s >= 0 && c.s!! - amb.s <= YIELD_M)
         })
+        val dv = viewDir(rideRef(me))
         val hz = JSONArray()
         for (h in hazards) {
             if (h.type == "SIREN") {
@@ -1910,8 +2061,12 @@ class LinkHub(routeJson: String) {
                 if (evc == null && h.reporters.isEmpty() && yieldsLive(h).isEmpty()) continue
                 hz.put(JSONObject().put("id", h.id).put("type", "SIREN").put("s", rnd(evPos(h).first)).put("cars", h.reporters.size)
                     .put("confirmed", evc != null || h.reporters.size >= ANON_CONFIRM).put("beacon", evc != null))
-            } else if (h.reporters.isNotEmpty())
-                hz.put(JSONObject().put("id", h.id).put("type", h.type).put("s", rnd(h.s)).put("cars", h.reporters.size).put("confirmed", h.reporters.size >= ANON_CONFIRM))
+            } else if (h.reporters.isNotEmpty()) {
+                val side = sideOf(h.dir, h.s, dv)
+                if (side == "drop") continue
+                hz.put(JSONObject().put("id", h.id).put("type", h.type).put("s", rnd(h.s)).put("cars", h.reporters.size).put("confirmed", h.reporters.size >= ANON_CONFIRM)
+                    .also { if (side != null) it.put("side", side) })
+            }
         }
         for (o in official) hz.put(JSONObject().put("id", o.id).put("type", "OFFICIAL").put("s", rnd(o.s)).put("cars", 0).put("confirmed", true))
         val ems = JSONArray().apply {
@@ -1920,7 +2075,7 @@ class LinkHub(routeJson: String) {
                 put(JSONObject().put("s", rnd(c.s!!)).put("on", true).put("beacon", true))
         }
         return JSONObject().put("now", r1(now)).put("cars", cs).put("hazards", hz)
-            .put("pulses", JSONArray(pulses.filter { now - it.getDouble("t") <= PULSE_SEC }.map { p ->   // 남의 차는 pub(내 신호만 내 id)
+            .put("pulses", JSONArray(pulses.filter { now - it.getDouble("t") <= PULSE_SEC && sideOf(it.optInt("dir"), it.getDouble("s"), dv) == null }.map { p ->   // 남의 차는 pub(내 신호만 내 id). 맞은편·불확실 보고의 고리는 그리지 않는다
                 JSONObject().put("t", p.get("t")).put("s", p.get("s")).put("type", p.get("type"))
                     .put("car", p.getString("car").let { cid -> if (cid == mid) cid else p.getString("pub") })
             })).put("ems", ems)
@@ -1929,7 +2084,9 @@ class LinkHub(routeJson: String) {
 
     fun routeInfo(): JSONObject = JSONObject().put("name", file.getString("name")).put("nameEn", file.getString("nameEn")).put("route", file.getJSONArray("route"))
         .put("length", rnd(length)).put("restAreas", JSONArray(rest.map { JSONObject().put("name", it.name).put("nameEn", it.nameEn).put("kind", it.kind).put("s", it.s).put("lat", it.lat).put("lon", it.lon) }))
-        .put("zones", file.optJSONArray("zones") ?: JSONArray()).put("sources", file.getJSONArray("sources"))
+        .put("zones", file.optJSONArray("zones") ?: JSONArray()).put("erExits", file.optJSONArray("erExits") ?: JSONArray())   // 구급차 지도의 응급실 표지(11-15)
+        .put("cameras", file.optJSONArray("cameras") ?: JSONArray())   // 단속카메라·제한속도 표지(공식 자료, build_cameras.py, 11-15)
+        .put("sources", file.getJSONArray("sources"))
 
     /** 두 서버가 같은 경로 규칙: /api/road/…(도로 링크), /api/link/…(가족 그룹) — (코드, 응답). 모든 응답에 api 버전을 싣는다 */
     @Synchronized
@@ -1995,6 +2152,7 @@ class LinkHub(routeJson: String) {
                 query["t"]?.toDoubleOrNull()?.let { clock(JSONObject().put("t", it).put("me", query["me"])) }
                 return 200 to view(query["me"])
             }
+            if (method == "POST" && (act == "parkphoto" || act == "parkphoto/take")) return parkPhoto(g, b, act == "parkphoto/take")
             if (method == "POST") {
                 when (act) {
                     "demo" -> demoGroup(g, b)

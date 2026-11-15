@@ -115,7 +115,7 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
         if (offerKind == "toilet") {
             if (yes) {
                 val c = p.getJSONArray("curb")
-                if (s.navi.routeTo(c.getDouble(0), c.getDouble(1), "${p.getString("name")} (Tago)", "nearby")) pickup.naviRouted = true
+                if (s.navi.routeTo(c.getDouble(0), c.getDouble(1), t[R.string.navi_poi_pickup, p.getString("name")], "nearby")) pickup.naviRouted = true
                 s.say(t[R.string.say_guiding_to, t.ro(p.getString("name"))])
             } else s.say(t[R.string.say_ok])
             s.render(); return
@@ -123,7 +123,7 @@ class NearbyOffers(private val s: Services, private val pickup: PickupController
         if (!yes) { s.say(t[R.string.say_wait_here]); s.render(); return }
         pickup.parkedWaiting = true
         val curb = p.getJSONArray("curb")
-        if (s.navi.routeTo(curb.getDouble(0), curb.getDouble(1), "${p.getString("name")} (Tago)", "nearby")) pickup.naviRouted = true   // 재약속 때 내비를 다시 잡도록
+        if (s.navi.routeTo(curb.getDouble(0), curb.getDouble(1), t[R.string.navi_poi_pickup, p.getString("name")], "nearby")) pickup.naviRouted = true   // 재약속 때 내비를 다시 잡도록
         s.say(t[R.string.say_parking_guide, t.ro(p.getString("name")), t.subj(pickup.member?.name ?: "")])
         s.render()
     }

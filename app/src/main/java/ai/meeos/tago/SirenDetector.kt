@@ -150,6 +150,9 @@ class SirenDetector {
  */
 class SirenMic(private val model: () -> java.nio.ByteBuffer?, private val onChange: (Boolean) -> Unit, private val log: (String) -> Unit) {
     @Volatile private var running = false
+    /** 녹음 스레드가 스스로 끝난 기록(stop() 으로 멈춘 것은 아니다): 끝난 시각·산 시간(elapsedRealtime ms)·실패로 끝났는지(모델 없음·마이크 오류·예외 — 시험 파일이 끝난 것은 실패가 아니다). 실행마다 새 객체 */
+    class SelfEnd(val at: Long, val lifeMs: Long, val failed: Boolean)
+    @Volatile var selfEnd: SelfEnd? = null; private set
     @Volatile private var gen = 0          // start 마다 하나씩: 멈춘 뒤 바로 다시 켜도 지난 스레드가 함께 돌지 않게
     private var thread: Thread? = null
     val active get() = running
@@ -166,9 +169,11 @@ class SirenMic(private val model: () -> java.nio.ByteBuffer?, private val onChan
             val hop = ShortArray(SirenDetector.HOP)
             var rec: AudioRecord? = null
             var file: RandomAccessFile? = null
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            var failed = false
             try {
                 det = model()?.let { SirenYamnet(it) }
-                if (det == null) { log("사이렌 감지: 모델(${SirenYamnet.ASSET}) 없음 — 끔"); return@Thread }
+                if (det == null) { failed = true; log("사이렌 감지: 모델(${SirenYamnet.ASSET}) 없음 — 끔"); return@Thread }
                 if (wav != null) { file = RandomAccessFile(wav, "r"); file.seek(44) }
                 else {
                     val min = AudioRecord.getMinBufferSize(SirenDetector.SR, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -190,7 +195,7 @@ class SirenMic(private val model: () -> java.nio.ByteBuffer?, private val onChan
                     }
                     if (n < hop.size) {
                         // 녹음 오류(다른 앱이 마이크를 쥠 등): 쉬지 않고 돌지 않게 0.2초 쉬고, 5초 넘게 이어지면 놓는다
-                        if (++errors > 25) { log("사이렌 감지: 마이크 오류가 이어져 멈춤"); break }
+                        if (++errors > 25) { failed = true; log("사이렌 감지: 마이크 오류가 이어져 멈춤"); break }
                         Thread.sleep(200); continue
                     }
                     errors = 0
@@ -198,12 +203,13 @@ class SirenMic(private val model: () -> java.nio.ByteBuffer?, private val onChan
                     if (on != last) { last = on; onChange(on); log("사이렌 감지: ${if (on) "켬" else "끔"}(점수 %.2f)".format(det.score)) }
                 }
             } catch (e: Exception) {
+                failed = true
                 log("사이렌 감지 오류: ${e.message}")
             } finally {
                 runCatching { rec?.stop() }; runCatching { rec?.release() }; runCatching { file?.close() }
                 det?.let { if (it.runs > 0) log("사이렌 감지: 추론 ${it.runs}회, 평균 %.1f ms".format(it.nanos / 1e6 / it.runs)); it.close() }
                 if (last) onChange(false)
-                if (my == gen) running = false
+                if (my == gen) { val at = android.os.SystemClock.elapsedRealtime(); selfEnd = SelfEnd(at, at - t0, failed); running = false }
             }
         }, "siren").apply { isDaemon = true; start() }
     }

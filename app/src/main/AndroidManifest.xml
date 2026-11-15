@@ -82,12 +82,23 @@
                 <action android:name="FIND_NEARBY" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <!-- Gleo Action(길벗): "길벗 시작해" — 같은 길의 차들과 연결 -->
+            <!-- Gleo Action: 같은 길의 차들과 연결 시작 -->
             <intent-filter>
                 <action android:name="START_ROAD_LINK" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <!-- 시연 훅의 유일한 입구(2026-11-13): `adb shell am broadcast -n …/ai.meeos.tago.app.DemoHookReceiver -a ai.meeos.tago.DEMO_HOOK` + extras.
+             DUMP 는 서명·특권 권한이라 일반 앱은 못 가지고 adb 셸만 가진다 → 다른 앱이 보내면 시스템이 거부한다. 훅이 꺼진 제품 빌드는 enabled=false -->
+        <receiver
+            android:name=".app.DemoHookReceiver"
+            android:exported="true"
+            android:enabled="${demoHooksEnabled}"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="ai.meeos.tago.DEMO_HOOK" />
+            </intent-filter>
+        </receiver>
         <!-- 연구 기록 내보내기(공유 시트): files/study/ 의 세션 JSONL 만 -->
         <provider
             android:name="androidx.core.content.FileProvider"

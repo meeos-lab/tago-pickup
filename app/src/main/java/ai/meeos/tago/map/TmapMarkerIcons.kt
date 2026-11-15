@@ -60,6 +60,31 @@ internal class TmapMarkerIcons(private val ctx: Context, private val dp: Float, 
         (if (id != 0) BitmapFactory.decodeResource(ctx.resources, id) else null) ?: puck("navigation", 44, "best")
     }
 
+    /**
+     * 내 차 표식(11-14, 상태마다 하나 — 둘을 겹치지 않는다): 가는 중 = 파란 화살촉 하나(뒤가 파인 삼각형 + 흰 테두리 3.5 + 옅은 그림자, 52 칸),
+     * 길 안내가 없는 때 = 흰 테두리 파란 점 32 + 옅은 후광 56. 지도 페이지(link.html meCursor·mePuck)와 같은 수치. 회전은 마커 rotation 으로
+     */
+    fun arrowhead(): Bitmap = bitmaps.getOrPut("arrowhead") {
+        val sz = (52 * dp).roundToInt(); val k = sz / 52f
+        val b = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888); val c = Canvas(b)
+        val path = android.graphics.Path().apply { moveTo(26 * k, 4 * k); lineTo(45 * k, 46 * k); lineTo(26 * k, 36 * k); lineTo(7 * k, 46 * k); close() }
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.style = Paint.Style.STROKE; p.strokeJoin = Paint.Join.ROUND; p.strokeWidth = 3.5f * 2 * k; p.color = Color.WHITE
+        p.setShadowLayer(3 * k, 0f, 2 * k, Color.argb(90, 0, 0, 0)); c.drawPath(path, p); p.clearShadowLayer()
+        p.style = Paint.Style.FILL; p.color = Color.parseColor("#178BF5"); c.drawPath(path, p)
+        b
+    }
+
+    fun dot(): Bitmap = bitmaps.getOrPut("dot") {
+        val sz = (56 * dp).roundToInt(); val k = sz / 56f; val r = sz / 2f
+        val b = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888); val c = Canvas(b)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = Color.argb(46, 23, 139, 245); c.drawCircle(r, r, r, p)               // 후광(.18)
+        p.color = Color.WHITE; p.setShadowLayer(2 * k, 0f, 1 * k, Color.argb(90, 0, 0, 0)); c.drawCircle(r, r, 16 * k, p); p.clearShadowLayer()
+        p.color = Color.parseColor("#178BF5"); c.drawCircle(r, r, 12 * k, p)
+        b
+    }
+
     /** 원형 퍽(docs/ui-design.md §9): kind = other(ink) · best(green 테) · sure(green 채움) · alt/via(orange 테) · no(제외) · cam(단속) */
     fun puck(icon: String, sizeDp: Int, kind: String): Bitmap = bitmaps.getOrPut("p:$icon:$sizeDp:$kind:$dark") {
         val face = if (dark) Color.parseColor("#1C1C1C") else Color.WHITE

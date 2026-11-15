@@ -1,4 +1,28 @@
+import com.android.build.api.artifact.SingleArtifact
 import java.util.Properties
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
+
+// 병합된 매니페스트에서 그 판이 쓰지 않는 <uses-permission> 을 뺀다(판별용 — 매니페스트 원본은 하나)
+abstract class StripPermissionsTask : DefaultTask() {
+    @get:InputFile abstract val inputManifest: RegularFileProperty
+    @get:OutputFile abstract val outputManifest: RegularFileProperty
+    @get:Input abstract val names: ListProperty<String>
+    @TaskAction fun run() {
+        var text = inputManifest.get().asFile.readText(Charsets.UTF_8)
+        for (n in names.get()) {
+            val re = Regex("""[ \t]*<uses-permission\b[^>]*\bandroid:name="${Regex.escape(n)}"[^>]*/>[ \t]*\r?\n?""")
+            require(re.containsMatchIn(text)) { "매니페스트에 없는 권한: $n" }
+            text = re.replace(text, "")
+        }
+        outputManifest.get().asFile.writeText(text, Charsets.UTF_8)
+    }
+}
 
 plugins {
     id("com.android.application")
@@ -23,6 +47,11 @@ val appLabel = if (gilbeotOnly) "길벗" else "Tago"
 val localPort = if (gilbeotOnly) 8790 else 8793
 // 시연·시험 인텐트 훅(utterance·belt_sim·convoy_sim…): debug 는 항상, release 는 -Pmeeos.demo=true 일 때만 (외부 앱이 인텐트로 명령을 넣는 통로라 제품 빌드에서는 닫는다)
 val demoHooks = (project.findProperty("meeos.demo") as String?) == "true"
+// 긴급차량 비컨 토큰(저장소 코드에 값을 두지 않는다 — docs/dev/83 S4): -Pmeeos.evToken → 환경변수 TAGO_EV_TOKEN → 루트의 ev_token.local(git 제외). 없으면 앱이 실행마다 무작위 값을 쓴다
+val evToken = ((project.findProperty("meeos.evToken") as String?)?.trim().orEmpty())
+    .ifEmpty { System.getenv("TAGO_EV_TOKEN")?.trim().orEmpty() }
+    .ifEmpty { rootProject.file("ev_token.local").takeIf { it.isFile }?.readText()?.trim().orEmpty() }
+    .filter { it.isLetterOrDigit() || it in "-_" }   // 따옴표·역슬래시가 BuildConfig 문자열을 깨지 않게
 // 연구 기록(경고 반응 로그 — 동의 화면·참가자 정보·JSONL): debug·qa 는 항상, release 는 -Pmeeos.study=true 일 때만(출품 APK 화면은 그대로).
 // 서버 업로드 주소는 -Pmeeos.studyUploadUrl=https://… (비어 있으면 업로드 스위치를 켜도 앱 안에만 남는다)
 val studyLog = (project.findProperty("meeos.study") as String?) == "true"
@@ -34,9 +63,13 @@ val signProps = Properties().apply {
 }
 
 // TMAP Open API 앱키(openapi.sk.com, 커밋 금지): local.properties 의 tmap.appKey. 비어 있으면 지도 페이지는 OpenFreeMap 바탕으로 돈다
-val tmapAppKey = Properties().apply {
+val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
-}.getProperty("tmap.appKey", "").trim()
+}
+val tmapAppKey = localProps.getProperty("tmap.appKey", "").trim()
+// 공공데이터포털 '국토교통부_건축HUB_건축물대장정보 서비스' 일반 인증키(커밋 금지): local.properties 의 BLDG_API_KEY. 주차 위치 기억의 방법 C(건물 층수).
+// TMAP 키와 같이 APK 에 들어간다(공모전 전용 키, 심사 뒤 폐기·재발급). 비어 있으면 방법 C 를 건너뛴다. pickupOnly 판에는 넣지 않는다
+val bldgApiKey = localProps.getProperty("BLDG_API_KEY", "").trim().replace("\\", "").replace("\"", "")
 
 // 버전: 심사 때마다 versionCode 가 올라야 한다(같으면 반려) — 커밋 수로 자동. git 이 없으면 1
 val gitVersionCode = runCatching {
@@ -48,8 +81,9 @@ val allAbis = (project.findProperty("meeos.allAbis") as String?) == "true"
 // 지도 데이터와 기다리는 사람용 웹 페이지는 server/ 의 파일을 그대로 앱 assets 로 복사한다(원본 하나). HTML 의 __TMAP_KEY__ 자리에만 앱키를 끼운다
 val copyMeeosAssets = tasks.register<Sync>("copyMeeosAssets") {   // Sync: 출품작을 바꿔 빌드할 때 지난 자산이 남지 않게
     from("../server") {
-        include("daechi_map.json", "rider.html", "daechi_cctv.json", "regions/*.json", "global/*_map.json")
-        if (!pickupOnly) include("link/gyeongbu_route.json", "link/link.html", "link/world.html", "link/ambulance.html", "link/models/**")   // 픽업 APK에는 함께 가기 자산을 넣지 않는다
+        include("daechi_map.json", "daechi_cctv.json", "regions/*.json", "global/*_map.json")
+        if (!gilbeotOnly) include("rider.html")   // 기다리는 사람용 휴대폰 페이지 — 그 기능이 없는 판의 APK 에는 넣지 않는다(MainActivity 가 빈 페이지를 넘긴다)
+        if (!pickupOnly) include("link/gyeongbu_route.json", "link/link.html", "link/world.html", "link/ambulance.html", "link/around.html", "link/models/**")   // 픽업 APK에는 함께 가기 자산을 넣지 않는다
         filesMatching("**/*.html") { filter { line -> line.replace("__TMAP_KEY__", tmapAppKey) } }
     }
     // 사이렌 감지 모델(YAMNet, 4 MB, app/siren/README.md): 도로 링크가 있는 판에만
@@ -99,7 +133,9 @@ android {
         buildConfigField("String", "PUBLIC_URL", if (pcServer) "\"http://127.0.0.1:8790\"" else "\"http://127.0.0.1:8791\"")
         // TMAP 앱키(local.properties 의 tmap.appKey, 커밋 금지). 있으면 차 화면 지도를 네이티브 TMAP SDK 로, 없으면 웹 지도(/car/)로
         buildConfigField("String", "TMAP_KEY", "\"$tmapAppKey\"")
+        buildConfigField("String", "BLDG_API_KEY", "\"" + (if (pickupOnly) "" else bldgApiKey) + "\"")   // 값은 로그·문서에 남기지 않는다(앱 로그는 '키 있음/없음'만)
         buildConfigField("String", "STUDY_UPLOAD_URL", "\"$studyUploadUrl\"")
+        buildConfigField("String", "EV_TOKEN", "\"$evToken\"")   // 비어 있으면 LinkHub 가 실행마다 무작위 토큰(구급차 휴대폰 주소는 시연 빌드 로그에)
     }
 
     signingConfigs {
@@ -124,6 +160,7 @@ android {
     buildTypes {
         getByName("debug") {
             buildConfigField("boolean", "DEMO_HOOKS", "true")
+            manifestPlaceholders["demoHooksEnabled"] = "true"
             buildConfigField("boolean", "STUDY_LOG", "true")
             manifestPlaceholders["studyLocationPermission"] = "android.permission.ACCESS_FINE_LOCATION"
             ndk { abiFilters += if (allAbis) listOf("arm64-v8a", "x86_64") else listOf("x86_64") }
@@ -135,6 +172,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
             buildConfigField("boolean", "DEMO_HOOKS", demoHooks.toString())
+            manifestPlaceholders["demoHooksEnabled"] = demoHooks.toString()   // 훅 수신기(adb 전용)는 훅이 켜진 빌드에서만 켠다
             buildConfigField("boolean", "STUDY_LOG", studyLog.toString())
             // 위치: 연구 빌드(차속 없는 차의 GPS 속도) 또는 길벗 판(휴게소 판정 offRoute — 차 안에서 계산, 불리언만 전송, 11-08). 픽업 판 제품 빌드는 넣지 않는다
             manifestPlaceholders["studyLocationPermission"] = if (studyLog || !pickupOnly) "android.permission.ACCESS_FINE_LOCATION" else "ai.meeos.permission.STUDY_GPS_UNUSED"
@@ -166,6 +204,17 @@ androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addStaticSourceDirectory(layout.buildDirectory.dir("generated/meeosAssets").get().asFile.path)
         variant.sources.resources?.addStaticSourceDirectory(layout.buildDirectory.dir("generated/meeosRes").get().asFile.path)   // Java 리소스(위 copyMeeosRes)
+        // 판별 문구(작품 이름이 든 문장): src/edition-<판>/res(판 = meeos.edition, 없으면 both) — main/res 에는 이 키들이 없다(res/values*/strings_edition.xml)
+        variant.sources.res?.addStaticSourceDirectory(file("src/edition-${edition.ifEmpty { "both" }}/res").path)
+        // 픽업 판은 쓰지 않는 권한(마이크 사이렌·에어백·공조·EV 에너지·조향각)을 병합 매니페스트에서 뺀다
+        // (이 신호는 그 기능이 있는 판에서만 읽고(readRoadSignals), 마이크 권한은 사이렌만 쓴다. 음성 인식 녹음은 SDK 서비스가 한다)
+        if (pickupOnly) {
+            val strip = tasks.register<StripPermissionsTask>("strip${variant.name.replaceFirstChar { it.uppercase() }}Permissions") {
+                names.set(listOf("android.permission.RECORD_AUDIO", "pleos.car.permission.CAR_SAFETY", "pleos.car.permission.CAR_CLIMATE",
+                    "pleos.car.permission.CAR_ENERGY", "pleos.car.permission.READ_CAR_STEERING"))
+            }
+            variant.artifacts.use(strip).wiredWithFiles(StripPermissionsTask::inputManifest, StripPermissionsTask::outputManifest).toTransform(SingleArtifact.MERGED_MANIFEST)
+        }
     }
 }
 
@@ -174,6 +223,7 @@ tasks.named("preBuild") { dependsOn(copyMeeosAssets, copyMeeosRes) }
 // 에뮬레이터 없는 두 엔진 대조용 JVM 허브(app/src/test/.../LinkHubServe.kt): -Pmeeos.linkServe=<포트> 일 때만 그 시험이 허브를 연다
 tasks.withType<Test>().configureEach {
     systemProperty("meeos.linkServe", (project.findProperty("meeos.linkServe") as String?).orEmpty())
+    systemProperty("meeos.linkRoute", (project.findProperty("meeos.linkRoute") as String?).orEmpty())   // 대조용 허브의 경로 파일(없으면 시연 경로) — 실제 경로로 만든 파일의 두 허브 대조(B-107)
     if ((project.findProperty("meeos.linkServe") as String?).isNullOrEmpty().not()) outputs.upToDateWhen { false }
 }
 
@@ -197,6 +247,10 @@ dependencies {
     implementation("com.google.flatbuffers:flatbuffers-java:24.3.25")   // VSM SDK 가 요구(공식 샘플과 같은 판)
     // 사이렌 감지: YAMNet TFLite 를 돌리는 LiteRT(구 TensorFlow Lite) — org.tensorflow.lite.Interpreter
     implementation("com.google.ai.edge.litert:litert:1.4.2")
+
+    // 주차 기둥 사진 글자 인식(새 기능 H): ML Kit 한국어 텍스트 인식(번들 모델, 기기 안에서만 돈다 — 사진은 서버로 가지 않는다).
+    // pickupOnly 판에는 이 기능이 없어 라이브러리를 넣지 않는다(컴파일에만 필요하고 APK 에는 들어가지 않는다 — Edition.roadLink 가 꺼진 판은 이 경로를 부르지 않는다)
+    if (pickupOnly) compileOnly("com.google.mlkit:text-recognition-korean:16.0.1") else implementation("com.google.mlkit:text-recognition-korean:16.0.1")
 
     // 단위 시험(app/src/test, 로컬 JVM): ./gradlew testDebugUnitTest -Pmeeos.edition=gilbeot — 순수 로직(말 해석·운전 위험·충전 설문 …)
     testImplementation("junit:junit:4.13.2")

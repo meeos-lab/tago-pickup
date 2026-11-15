@@ -31,4 +31,20 @@ class TmapRouteTest {
         assertEquals("127.05,37.55", r.getString("passList"))
         assertEquals("Y", r.getString("trafficInfo"))
     }
+
+    // 11-14 오후: 첫 화면 실제 경로 — 구간을 이어 붙이고(겹치는 끝점 하나), 첫 지물의 totalDistance·totalTime 을 요약으로
+    @Test fun plainJoinsSegmentsAndReadsSummary() {
+        val text = """{"features":[
+          {"type":"Feature","geometry":{"type":"Point","coordinates":[127.1,37.4]},"properties":{"totalDistance":24012,"totalTime":2130}},
+          {"type":"Feature","geometry":{"type":"LineString","coordinates":[[127.1,37.4],[127.1,37.3]],"traffic":[]},"properties":{}},
+          {"type":"Feature","geometry":{"type":"LineString","coordinates":[[127.1,37.3],[127.0,37.2]],"traffic":[]},"properties":{}}]}"""
+        val p = TmapRoute.parsePlain(text)
+        assertEquals(listOf(LL(37.4, 127.1), LL(37.3, 127.1), LL(37.2, 127.0)), p.points)
+        assertEquals(24012, p.distM); assertEquals(2130, p.timeS)
+    }
+
+    @Test fun plainWithoutSummaryIsAnError() {
+        val text = """{"features":[{"type":"Feature","geometry":{"type":"LineString","coordinates":[[127.1,37.4],[127.1,37.3]]},"properties":{}}]}"""
+        assertThrows(IllegalStateException::class.java) { TmapRoute.parsePlain(text) }
+    }
 }

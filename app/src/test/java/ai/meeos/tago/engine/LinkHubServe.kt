@@ -19,7 +19,9 @@ class LinkHubServe {
     @Test fun serve() {
         val port = System.getProperty("meeos.linkServe").orEmpty().toIntOrNull()
         assumeTrue("meeos.linkServe 가 없으면 건너뛴다", port != null)
-        val hub = LinkHub(MeeosEngineTest.server("link/gyeongbu_route.json"))
+        // 경로 파일: 기본은 시연 경로. -Pmeeos.linkRoute=<파일> 로 다른 경로 파일(PC 허브는 환경 변수 LINK_ROUTE_FILE) — 실제 경로로 만든 파일의 두 허브 대조(B-107)
+        val routeText = System.getProperty("meeos.linkRoute").orEmpty().takeIf { it.isNotBlank() }?.let { java.io.File(it).readText(Charsets.UTF_8) } ?: MeeosEngineTest.server("link/gyeongbu_route.json")
+        val hub = LinkHub(routeText).also { h -> ai.meeos.tago.BuildConfig.EV_TOKEN.takeIf { it.isNotBlank() }?.let { h.evToken = it } }   // 대조 스크립트와 같은 토큰(ev_token.local)
         val done = CountDownLatch(1)
         val http = HttpServer.create(InetSocketAddress("127.0.0.1", port!!), 0)
         fun decode(s: String) = runCatching { URLDecoder.decode(s, "UTF-8") }.getOrDefault(s)
@@ -44,7 +46,7 @@ class LinkHubServe {
                 500 to JSONObject().put("error", "server error")
             }
             val bytes = o.toString().toByteArray(Charsets.UTF_8)
-            ex.responseHeaders.add("Content-Type", "application/json; charset=utf-8")
+            LinkHub.responseHeaders(o).forEach { (k, v) -> ex.responseHeaders.add(k, v) }   // LocalServer 와 같은 헤더(problem+json·Retry-After, B-67)
             ex.sendResponseHeaders(code, bytes.size.toLong())
             ex.responseBody.use { it.write(bytes) }
         }

@@ -51,6 +51,17 @@ class OffRouteSensor(private val context: Context, private val log: AppLog, priv
         return v
     }
 
+    /** 우회 따름 판정용 횡거리(m): 정확도·신선도가 충분할 때만, 아니면 null. 값은 차 안에서만 쓰고 보내지 않는다(DetourComply.offRoute1km) */
+    /** 마지막 GPS 고정(10초 안의 것만) — 시연 주행 판정(실제 위치 ↔ 경로 위 내 자리)에 쓴다. 밖으로 보내지 않는다 */
+    fun freshFix(): Location? = last?.takeIf { (SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos) / 1_000_000 <= FRESH_MS }
+
+    fun lateralM(): Double? {
+        val l = last ?: return null
+        val ageMs = (SystemClock.elapsedRealtimeNanos() - l.elapsedRealtimeNanos) / 1_000_000
+        if (!l.hasAccuracy() || l.accuracy.toDouble() > LinkHub.REST_LATERAL_M || ageMs > FRESH_MS) return null
+        return lateralOf(l.latitude, l.longitude).takeIf { !it.isNaN() }
+    }
+
     companion object {
         const val FRESH_MS = 10_000L   // 이보다 오래된 GPS 고정은 쓰지 않는다
 

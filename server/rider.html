@@ -356,14 +356,14 @@ function leafletApi() {
 // 쓰는 확장은 OES_vertex_array_object(WebGL2 기본 기능으로 잇는다)·WEBGL_lose_context 둘뿐이다. 실차처럼 WebGL1 이 되면 아무것도 바꾸지 않는다
 function webgl1OnWebgl2() {
   const proto = HTMLCanvasElement.prototype;
-  if (proto.__tagoGl1) return; proto.__tagoGl1 = true;
+  if (proto.__mapGl1) return; proto.__mapGl1 = true;
   const orig = proto.getContext;
   proto.getContext = function (type, attrs) {
     const ctx = orig.call(this, type, attrs);
     if (ctx || (type !== 'webgl' && type !== 'experimental-webgl')) return ctx;
     const gl = orig.call(this, 'webgl2', attrs);
-    if (!gl || gl.__tagoGl1) return gl;
-    gl.__tagoGl1 = true;
+    if (!gl || gl.__mapGl1) return gl;
+    gl.__mapGl1 = true;
     const ext = gl.getExtension.bind(gl);
     gl.getExtension = name => name !== 'OES_vertex_array_object' ? ext(name) : {
       VERTEX_ARRAY_BINDING_OES: gl.VERTEX_ARRAY_BINDING,

@@ -20,3 +20,11 @@
 # 엔진·서버는 org.json 으로 문자열 키를 쓰므로 이름 보존이 필요 없다. 로그의 스택이 읽히게 줄 번호는 남긴다
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# 주차 기둥 사진 글자 인식(ML Kit 한국어, 주차 위치 기억이 있는 판, 2026-11-13): ML Kit 은 매니페스트 meta-data 의 클래스 이름 문자열로 구성 요소(ComponentRegistrar)를 찾는다.
+# R8 이 그 클래스를 '안 쓰는 것'으로 지워 릴리스에서만 TextRecognition.getClient 가 NPE 로 죽었다(에뮬레이터 실측) → ML Kit 패키지를 지키고 경고를 끈다
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_common.** { *; }
+-keep class * implements com.google.firebase.components.ComponentRegistrar { *; }
+-dontwarn com.google.mlkit.**

@@ -53,6 +53,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
     private var askedPointId: String? = null      // 운전자에게 음성으로 물은 지점 (확정은 이 지점으로)
     private var askedAltId: String? = null
     private var lastCarSig = ""
+    private var carSentAt = 0L; private var carSeq = 0   // 차 상태 보고의 응답 대기 표시(elapsedRealtime, 0 = 응답 받음) — 응답 전에는 다음 보고를 쌓지 않는다
     private var beltAtConfirm: Map<SeatValue, Boolean> = emptyMap()   // 확정 시점의 좌석별 벨트 — 이미 매고 있던 사람을 '탑승'으로 오판하지 않게
     private var roadDoorWarnedAt = 0L                                 // 차도 쪽 문 경고(한 번 열릴 때 한 번)
     private var roadDoorWasOpen = false
@@ -82,7 +83,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
             .apply { if (region == Region.DAECHI) put("carDesc", "흰색 그랜저 · 12가 3456") }
         s.api.post("/api/session", body, onError = { e -> if (gen == startGen) s.log.d("세션 생성 실패: ${e.message}") }) { res ->
             if (gen != startGen) return@post   // 그사이 다시 시작했거나 끝냈다
-            sessionId = res.getString("id")
+            sessionId = res.getString("id"); carSentAt = 0L
             status = PickupStatus.WAITING_RIDER
             onMapUrl("${BuildConfig.SERVER_URL}/car/$sessionId")
             s.log.demo("가족(보호자) 보기: ${BuildConfig.PUBLIC_URL}/f/$sessionId")
@@ -118,9 +119,14 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
             // 바뀐 게 있을 때만 보낸다(주행 중이면 매초, 정차 중이면 2초마다 — 응답으로 아이 쪽 변화를 받아 화면·음성을 갱신)
             val g = if (car.driving) "D" else "P"
             val sig = "$g|${car.wiper}|${"%.0f".format(progress)}|${"%.1f".format(car.speedMs)}"
-            if (sig != lastCarSig || tickCount % 2 == 0) {
+            val nowE = android.os.SystemClock.elapsedRealtime()
+            // 앞 보고의 응답을 아직 못 받았으면 건너뛴다(서버가 느릴 때 단일 io 스레드 대기열에 1초마다 쌓이지 않게). 8초 뒤에는 다시 보낸다
+            if ((sig != lastCarSig || tickCount % 2 == 0) && (carSentAt == 0L || nowE - carSentAt >= CAR_STALL_MS)) {
                 lastCarSig = sig
-                post("/api/session/$id/car", JSONObject().put("progress", progress).put("speed", car.speedMs.toDouble()).put("gear", g).put("wiper", car.wiper))
+                carSentAt = nowE
+                val seq = ++carSeq
+                s.api.post("/api/session/$id/car", JSONObject().put("progress", progress).put("speed", car.speedMs.toDouble()).put("gear", g).put("wiper", car.wiper),
+                    onError = { e -> if (seq == carSeq) carSentAt = 0L; s.log.d("서버 오류: ${e.message}") }) { st -> if (seq == carSeq) carSentAt = 0L; onState(st) }
             }
         }
         checkBoarding()
@@ -258,7 +264,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
         if (lastState?.optJSONObject("via") != null) sessionId?.let { post("/api/session/$it/via", JSONObject()) }   // 경유지(매장)를 들렀으니 지운다
         val curb = target.getJSONArray("curb")
         val name = target.getString("name")
-        if (s.navi.routeTo(curb.getDouble(0), curb.getDouble(1), t[R.string.navi_poi_meeting, name], "만남 지점 $name")) naviRouted = true
+        if (s.navi.routeTo(curb.getDouble(0), curb.getDouble(1), t[R.string.navi_poi_meeting, name], "만남 지점 $name")) { naviRouted = true; s.say(t[R.string.say_navi_started, name]) }   // 순정 내비로 넘긴 사실을 한 문장(11-14)
     }
 
     /** 만날 곳을 목적지로, 매장을 첫 경유지로 */
@@ -288,6 +294,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
             car.rearDoorOpened = false
             post("/api/session/$id/boarding", JSONObject().put("state", PickupStatus.BOARDED).put("seat", seat.name).put("seatLabel", t.seatLabel(seat)).put("belt", beltOf(seat) == true))
             s.say(t[R.string.say_boarded, t.seatLabel(seat), m.name])
+            if (naviRouted) { s.navi.cancelPickupRoute(); naviRouted = false }   // 탔으니 만날 곳 안내는 끝(이 앱이 넘긴 것만 — 사용자가 잡은 목적지는 그대로, 11-14)
             s.render()
         } else if (status == PickupStatus.BOARDED && !car.driving && car.rearDoorOpen() && (boardedSeat?.let { car.seatOcc[it] } == false || progress > maxProgress() - DROP_END_MARGIN_M)) {
             // 하차: 정차 후 2열 문 열림 + 탄 좌석이 빔(실차) / 에뮬레이터는 착석 값이 고정이라 경로 끝(도곡로 동쪽) 도착으로 대신
@@ -387,6 +394,7 @@ class PickupController(private val s: Services, private val onMapUrl: (String) -
     fun reaskProposalIfPending() { if (lastState?.isNull("confirmed") != false) lastProposalVersion = 0 }
 
     private companion object {
+        const val CAR_STALL_MS = 8_000L   // 차 상태 보고 응답을 이만큼 못 받으면 막힌 것으로 보고 다시 보낸다
         val CABIN_WATCH = setOf(PickupStatus.CONFIRMED, PickupStatus.ARRIVED, PickupStatus.BOARDED)   // 좌석·벨트·문을 보는 상태(탑승 판단)
         val EN_ROUTE = setOf(PickupStatus.CONFIRMED, PickupStatus.ARRIVED)                 // 만날 곳으로 가는 중
         val RIDER_ON_BOARD = setOf(PickupStatus.BOARDED, PickupStatus.DROPPED)             // 차가 직접 정한 상태 — 서버 상태로 되돌리지 않는다

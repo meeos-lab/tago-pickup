@@ -10,14 +10,12 @@ import ai.meeos.tago.ui.VoiceUi
 import ai.meeos.tago.ui.theme.Dim
 import ai.meeos.tago.ui.theme.Tago
 import ai.meeos.tago.ui.theme.TagoType
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,7 +58,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /*
  * 컴포넌트 — docs/ui-design.md §5. Pleos 순정 설정 UI 문법: 직각, 1px 회색 테두리, 선택·주 동작은 검정 채움 + 흰 글자, 섹션은 얇은 구분선.
- * 모든 글은 UiState 로 받은 완성 문자열(지역 언어)이다. 눌림 95% 축소(80ms)는 Pleos 기본 버튼의 shrink effect. 그림자는 쓰지 않는다.
+ * 모든 글은 UiState 로 받은 완성 문자열(지역 언어)이다. 눌림은 순정 설정과 같은 회색 물결(ripple, Tago.colors.ripple) — 95% 축소·눌림 면 색은 없다. 그림자는 쓰지 않는다.
  */
 
 enum class ButtonVariant { PRIMARY, SECONDARY, DANGER, DANGER_OUTLINE }
@@ -98,7 +96,7 @@ fun PressFeedbackScope(content: @Composable () -> Unit) {
 
 /** 연타 막기: 0.8초 안의 두 번째 누름은 버린다(흔들리는 차에서 두 번 눌려 요청·안내가 두 번 가지 않게) */
 @Composable
-private fun debounced(onClick: () -> Unit): () -> Unit {
+internal fun debounced(onClick: () -> Unit): () -> Unit {
     val last = remember { longArrayOf(0L) }
     return {
         val now = android.os.SystemClock.uptimeMillis()
@@ -132,23 +130,23 @@ fun TagoButton(
 ) {
     val c = Tago.colors
     val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.95f else 1f, tween(80), label = "shrink")
     // 좁은 창(Connect-L 1274 의 600 패널에 버튼 둘)에서 글이 잘리면 좌우 패딩을 40 → 16 으로 줄여 글을 살린다(높이·간격은 그대로)
     var tight by remember(label) { mutableStateOf(false) }
+    // 눌림은 물결이 맡는다(면 색은 그대로 — 눌림 색·95 % 축소를 겹치지 않는다). 검정·빨강 채움 위는 채움 위 물결 색(흰색·검정)
     val (fill, fg, stroke) = when (variant) {
-        ButtonVariant.PRIMARY -> Triple(if (pressed) c.ink.copy(alpha = 0.8f) else c.ink, c.onInk, null)
-        ButtonVariant.SECONDARY -> Triple(if (pressed) c.surfaceAlt else c.surface, c.text, c.line)
-        ButtonVariant.DANGER -> Triple(if (pressed) c.red.copy(alpha = 0.85f) else c.red, c.onInk, null)
-        ButtonVariant.DANGER_OUTLINE -> Triple(if (pressed) c.surfaceAlt else c.surface, c.red, c.line)
+        ButtonVariant.PRIMARY -> Triple(c.ink, c.onInk, null)
+        ButtonVariant.SECONDARY -> Triple(c.surface, c.text, c.line)
+        ButtonVariant.DANGER -> Triple(c.red, c.onInk, null)
+        ButtonVariant.DANGER_OUTLINE -> Triple(c.surface, c.red, c.line)
     }
+    val filled = variant == ButtonVariant.PRIMARY || variant == ButtonVariant.DANGER
     Row(
         modifier = modifier
             .height(size.height)
-            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = if (enabled) 1f else 0.4f }
+            .graphicsLayer { alpha = if (enabled) 1f else 0.4f }
             .background(fill)
             .then(if (stroke != null) Modifier.border(Dim.line, stroke) else Modifier)
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = debounced(onClick))
+            .clickable(interactionSource = interaction, indication = ripple(color = if (filled) c.rippleOnFill else c.ripple), enabled = enabled, onClick = debounced(onClick))
             .padding(horizontal = if (tight) Dim.gapS else Dim.buttonPadH),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (alignStart) Arrangement.Start else Arrangement.Center,
@@ -264,18 +262,17 @@ fun MemberList(members: List<MemberUi>, onClick: (MemberUi) -> Unit) {
         Divider()
         members.forEach { m ->
             val interaction = remember { MutableInteractionSource() }
-            val pressed by interaction.collectIsPressedAsState()
-            val fg = if (pressed) c.onInk else c.text
+            val fg = c.text
             Row(
-                Modifier.fillMaxWidth().height(Dim.buttonL).background(if (pressed) c.ink else c.surface)
-                    .clickable(interactionSource = interaction, indication = null, onClick = debounced { onClick(m) }).padding(horizontal = 24.dp),
+                Modifier.fillMaxWidth().height(Dim.buttonL).background(c.surface)
+                    .clickable(interactionSource = interaction, indication = ripple(color = c.ripple), onClick = debounced { onClick(m) }).padding(horizontal = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TagoIcon(m.icon, fg, 40.dp)
                 Spacer(Modifier.width(24.dp))
                 Text(m.name, style = TagoType.bodyLBold, color = fg, maxLines = 1)
                 Spacer(Modifier.width(16.dp))
-                Text(m.relation, style = TagoType.labelM, color = if (pressed) c.onInk else c.text2, maxLines = 1)
+                Text(m.relation, style = TagoType.labelM, color = c.text2, maxLines = 1)
             }
             Divider()
         }
@@ -290,11 +287,10 @@ fun SegmentedControl(items: List<RegionUi>, selectedId: String, onSelect: (Strin
         items.forEachIndexed { i, r ->
             val on = r.id == selectedId
             val interaction = remember { MutableInteractionSource() }
-            val pressed by interaction.collectIsPressedAsState()
             if (i > 0) Box(Modifier.width(Dim.line).fillMaxHeight().background(c.line))
             Box(
-                Modifier.weight(1f).fillMaxHeight().background(if (on) c.ink else if (pressed) c.surfaceAlt else c.surface)
-                    .clickable(interactionSource = interaction, indication = null, onClick = debounced { onSelect(r.id) }),
+                Modifier.weight(1f).fillMaxHeight().background(if (on) c.ink else c.surface)
+                    .clickable(interactionSource = interaction, indication = ripple(color = if (on) c.rippleOnFill else c.ripple), onClick = debounced { onSelect(r.id) }),
                 contentAlignment = Alignment.Center,
             ) { Text(r.label, style = TagoType.bodyM, color = if (on) c.onInk else c.text, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }

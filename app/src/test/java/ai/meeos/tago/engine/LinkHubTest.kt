@@ -38,7 +38,7 @@ class LinkHubTest {
     @Test fun emergencyVehicleNeedsToken() {
         assertEquals(403, post("join", JSONObject().put("kind", "ev")).first)
         assertEquals(403, post("join", JSONObject().put("kind", "ev").put("token", "guess")).first)
-        assertEquals(200, post("join", JSONObject().put("kind", "ev").put("token", LinkHub.EV_TOKEN)).first)
+        assertEquals(200, post("join", JSONObject().put("kind", "ev").put("token", hub.evToken)).first)
     }
 
     @Test fun carIdIsPrivate() {

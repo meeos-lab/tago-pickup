@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 앱 아이콘(Adaptive Icon): 순정 독 아이콘처럼 짙은 회색 판에 흰 그림. 그림은 GPT Image 2.6 으로 그리고 108dp 판의 가운데 40% 에 둔다(브랜드 마스크 safe zone 안) -->
+<!-- 앱 아이콘(Adaptive Icon, 11-14 사용자 그림): 짙은 초록 바탕에 굽은 차로, 흰 차 두 대와 둘을 잇는 주황 빛 띠.
+     앞 층 그림은 밀도별 mipmap(108·162·216·324·432 px = 108dp)으로 원본(1254 px)에서 바로 줄였다 — 한 장(nodpi 432 px)만 두면
+     런처가 76 px 로 줄여 그릴 때 선이 끊기고 계단이 진다(11-14 사용자 "아이콘이 너무 깨져보이는데"). 차 두 대는 안전 영역(가운데 지름 66dp 원) 안,
+     둘레는 같은 초록. 단색(테마) 층은 예전 흰 그림을 그대로 쓴다 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_bg" />
-    <foreground android:drawable="@drawable/ic_launcher_fg_gilbeot" />
+    <background android:drawable="@color/ic_launcher_bg_green" />
+    <foreground android:drawable="@mipmap/ic_launcher_fg_gilbeot" />
     <monochrome android:drawable="@drawable/ic_launcher_fg_gilbeot" />
 </adaptive-icon>

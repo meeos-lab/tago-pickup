@@ -28,6 +28,29 @@ object TmapRoute {
         parse(Http.text(URL, "POST", request(from, to, via, heading).toString().toByteArray(),
             mapOf("appKey" to appKey, "Content-Type" to "application/json", "accept" to "application/json"), CONNECT_MS, READ_MS, requireOk = true))
 
+    /** 첫 화면(11-14): 실제 위치 → 목적지 경로 한 줄과 요약(거리 m·시간 s). 방향 조건 없이(서 있는 차), 교통 반영 */
+    data class Plain(val points: List<LL>, val distM: Int, val timeS: Int)
+
+    fun fetchPlain(appKey: String, from: LL, to: LL): Plain {
+        val body = JSONObject().apply {
+            put("startX", from.lon); put("startY", from.lat); put("endX", to.lon); put("endY", to.lat)
+            put("reqCoordType", "WGS84GEO"); put("resCoordType", "WGS84GEO"); put("trafficInfo", "Y"); put("searchOption", 0)
+        }
+        return parsePlain(Http.text(URL, "POST", body.toString().toByteArray(),
+            mapOf("appKey" to appKey, "Content-Type" to "application/json", "accept" to "application/json"), CONNECT_MS, READ_MS, requireOk = true))
+    }
+
+    /** 응답 → 점들(구간을 이어 붙임, 겹치는 끝점 하나 뺌) + 첫 지물의 totalDistance·totalTime. 없으면 IllegalStateException */
+    fun parsePlain(text: String): Plain {
+        val segs = parse(text)
+        val pts = ArrayList<LL>()
+        for ((_, cs) in segs) { if (pts.isNotEmpty() && pts.last() == cs.first()) pts.addAll(cs.drop(1)) else pts.addAll(cs) }
+        val props = JSONObject(text).optJSONArray("features")?.optJSONObject(0)?.optJSONObject("properties")
+        val d = props?.optInt("totalDistance", -1) ?: -1; val t = props?.optInt("totalTime", -1) ?: -1
+        if (d < 0 || t < 0) error("요약 없음")
+        return Plain(pts, d, t)
+    }
+
     /** 응답 features 의 LineString 마다 traffic [시작 점, 끝 점, 혼잡도, …] 로 점 사이 칸에 혼잡도를 칠하고, 같은 혼잡도가 이어진 칸끼리 한 구간으로 */
     fun parse(text: String): List<Pair<Int, List<LL>>> {
         val feats = JSONObject(text).optJSONArray("features") ?: error("빈 응답")

@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 앱 아이콘(Adaptive Icon): 순정 독 아이콘처럼 짙은 회색 판에 흰 그림. 그림은 GPT Image 2.6 으로 그리고 108dp 판의 가운데 40% 에 둔다(브랜드 마스크 safe zone 안) -->
+<!-- 앱 아이콘(Adaptive Icon, 11-14 사용자 그림): 짙은 초록 바탕에 주황빨강 위치 핀, 핀 안에 앞에서 본 크림색 차.
+     앞 층 그림은 밀도별 mipmap(각 밀도 108dp 의 2배 크기)으로 원본(1254 px)에서 바로 줄였다 — 런처가 정확히 절반으로 줄여 그려 선이 깨지지 않는다.
+     핀 전체(아래 뾰족한 끝까지)가 보이는 창(72dp)의 92 % 안. 단색(테마) 층은 예전 흰 그림을 그대로 쓴다 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_bg" />
-    <foreground android:drawable="@drawable/ic_launcher_fg_tago" />
+    <background android:drawable="@color/ic_launcher_bg_green" />
+    <foreground android:drawable="@mipmap/ic_launcher_fg_tago" />
     <monochrome android:drawable="@drawable/ic_launcher_fg_tago" />
 </adaptive-icon>

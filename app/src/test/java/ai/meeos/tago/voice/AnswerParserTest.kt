@@ -22,6 +22,10 @@ class AnswerParserTest {
         assertTrue(AnswerParser.isRestStop(u("다음 휴게소에서 쉬어가자")))
         assertTrue(AnswerParser.isRestStop(u("take a break")))
         assertTrue(AnswerParser.isStartRoad(u("길벗 출발")))
+        assertTrue(AnswerParser.isStartRoad(u("연결해 줘")))
+        assertTrue(AnswerParser.isTogether(u("같이 가자")))            // 일행 만들기 — 주변 차 연결과 다른 말
+        assertTrue(AnswerParser.isTogether(u("drive together")))
+        assertFalse(AnswerParser.isStartRoad(u("함께 가자")))
         assertTrue(AnswerParser.isGroup(u("가족한테 알려 줘")))
         assertTrue(AnswerParser.isToilet(u("restroom please")))
         assertTrue(AnswerParser.isDriveThru(u("drive thru")))
